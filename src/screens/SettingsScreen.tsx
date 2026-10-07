@@ -1,0 +1,70 @@
+import React from 'react';
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import { colors, radii, shadows } from '../theme/theme';
+import { AppIcon, IconButton, Surface } from '../components/Ui';
+import { useAppStore } from '../store/AppStore';
+import { exportAppData } from '../data/storage';
+import { clearChatGPTAccount, saveChatGPTAccount } from '../services/chatgptAuth';
+
+export const SettingsScreen = ({ onClose }: { onClose: () => void }) => {
+  const { data, updateSettings, connectChatGPT, disconnectChatGPT } = useAppStore();
+
+  const connect = () => {
+    Alert.alert('Connect with ChatGPT', 'The app is prepared to store this connection in the iOS Keychain. The approved Sign in with ChatGPT OAuth callback will be connected here before production use.', [{ text: 'Got it' }]);
+  };
+
+  const signOut = () => {
+    Alert.alert('Sign out of ChatGPT?', 'Your local notes and notebooks will remain on this device.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Sign out', style: 'destructive', onPress: async () => { await clearChatGPTAccount(); disconnectChatGPT(); } }]);
+  };
+
+  const exportLibrary = async () => {
+    const content = await exportAppData(data);
+    const path = `${FileSystem.cacheDirectory}note-app-chat-backup.json`;
+    await FileSystem.writeAsStringAsync(path, content);
+    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(path, { mimeType: 'application/json', dialogTitle: 'Export your local library' });
+    else await Share.share({ message: content, title: 'Note App Chat backup' });
+  };
+
+  return (
+    <View style={styles.screen}><View style={styles.header}><IconButton icon="close" onPress={onClose} color={colors.text} accessibilityLabel="Close settings" /><View style={{ flex: 1 }}><Text style={styles.kicker}>PREFERENCES</Text><Text style={styles.title}>Settings</Text></View></View><ScrollView contentContainerStyle={styles.content}>
+      <Text style={styles.groupLabel}>ACCOUNT</Text>
+      <Surface style={styles.accountCard}><View style={styles.accountIcon}><AppIcon name="logo-electron" size={22} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.cardTitle}>{data.chatGPTAccount.connected ? data.chatGPTAccount.displayName || 'ChatGPT connected' : 'ChatGPT not connected'}</Text><Text style={styles.cardBody}>{data.chatGPTAccount.connected ? data.chatGPTAccount.email || 'Eligible plan usage enabled' : 'Connect to use your ChatGPT plan without an API key.'}</Text></View>{data.chatGPTAccount.connected ? <Pressable onPress={signOut} style={styles.outlineButton}><Text style={styles.outlineText}>Sign out</Text></Pressable> : <Pressable onPress={connect} style={styles.connectButton}><Text style={styles.connectText}>Connect</Text></Pressable>}</Surface>
+      <Text style={styles.groupLabel}>CHAT PREFERENCES</Text>
+      <Surface><PreferenceRow label="Explanation complexity" value={String(data.settings.aiComplexity)} onPress={() => updateSettings({ aiComplexity: data.settings.aiComplexity >= 10 ? 1 : data.settings.aiComplexity + 1 })} hint="Tap to cycle from beginner to expert" /><PreferenceRow label="Personality" value={String(data.settings.aiPersonality)} onPress={() => updateSettings({ aiPersonality: data.settings.aiPersonality >= 10 ? 1 : data.settings.aiPersonality + 1 })} hint="Tap to cycle from direct to playful" /><PreferenceRow label="Response format" value={data.settings.responseFormat} onPress={() => { const options = ['Bullet Points', 'Numbered Lists', 'Paragraphs'] as const; const index = options.indexOf(data.settings.responseFormat); updateSettings({ responseFormat: options[(index + 1) % options.length] }); }} /></Surface>
+      <Text style={styles.groupLabel}>LOCAL DATA</Text>
+      <Surface><SettingRow icon="lock-closed-outline" title="Local-first storage" body="Notes, notebooks, quizzes, and chats remain on this device." /><SettingRow icon="cloud-offline-outline" title="Firebase sync" body="Prepared for a future version, intentionally unused in v1." /><Pressable onPress={exportLibrary} style={styles.exportRow}><View style={styles.rowIcon}><AppIcon name="download-outline" size={18} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.rowTitle}>Export local library</Text><Text style={styles.rowBody}>Create a portable JSON backup for moving devices.</Text></View><AppIcon name="chevron-forward" size={17} color={colors.textFaint} /></Pressable></Surface>
+      <Text style={styles.footerNote}>Note App Chat · local-first preview build</Text>
+    </ScrollView></View>
+  );
+};
+
+const PreferenceRow = ({ label, value, hint, onPress }: { label: string; value: string; hint?: string; onPress: () => void }) => <Pressable onPress={onPress} style={styles.preferenceRow}><View style={{ flex: 1 }}><Text style={styles.rowTitle}>{label}</Text>{hint && <Text style={styles.rowBody}>{hint}</Text>}</View><View style={styles.valuePill}><Text style={styles.valueText}>{value}</Text></View></Pressable>;
+const SettingRow = ({ icon, title, body }: { icon: string; title: string; body: string }) => <View style={styles.settingRow}><View style={styles.rowIcon}><AppIcon name={icon} size={18} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowBody}>{body}</Text></View><AppIcon name="checkmark-circle" size={17} color={colors.success} /></View>;
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 13, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  kicker: { color: colors.primary, fontWeight: '800', letterSpacing: 1, fontSize: 9 },
+  title: { color: colors.text, fontSize: 23, fontWeight: '800', marginTop: 2 },
+  content: { padding: 16, paddingBottom: 40 },
+  groupLabel: { color: colors.textFaint, fontSize: 10, fontWeight: '900', letterSpacing: 1.1, marginTop: 10, marginBottom: 9 },
+  accountCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  accountIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  cardTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  cardBody: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  connectButton: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 },
+  connectText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  outlineButton: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 8 },
+  outlineText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
+  preferenceRow: { flexDirection: 'row', alignItems: 'center', minHeight: 59, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 12 },
+  valuePill: { borderRadius: 9, backgroundColor: colors.primarySoft, paddingHorizontal: 9, paddingVertical: 6 },
+  valueText: { color: colors.primaryDark, fontSize: 11, fontWeight: '800' },
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 65, borderBottomWidth: 1, borderBottomColor: colors.border },
+  exportRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 65 },
+  rowIcon: { width: 33, height: 33, borderRadius: 11, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  rowTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  rowBody: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  footerNote: { color: colors.textFaint, fontSize: 10, textAlign: 'center', marginTop: 28 },
+});

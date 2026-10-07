@@ -1,13 +1,17 @@
 {
   "expo": {
-    "name": "note-app-chat-react-native",
-    "slug": "note-app-chat-react-native",
+    "name": "Note App Chat",
+    "slug": "note-app-chat",
+    "scheme": "noteappchat",
     "version": "1.0.0",
+    "jsEngine": "hermes",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ethankurtz.noteappchat",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,6 +24,15 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "autolinking": {
+      "legacy_shallowReactNativeLinking": true
+    },
+    "plugins": [
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-font"
+    ]
   }
 }
