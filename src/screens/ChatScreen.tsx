@@ -19,16 +19,22 @@ export const ChatScreen = ({
   const [input, setInput] = useState('');
   const [quickMode, setQuickMode] = useState(false);
   const [attachmentName, setAttachmentName] = useState<string>();
+  const [sending, setSending] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const orderedMessages = useMemo(() => [...(chat?.messages || [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [chat]);
 
-  const submit = () => {
-    if (!chat || !input.trim()) return;
-    sendMessage(chat.id, quickMode ? `${input}\n\nPlease keep the response concise.` : input, attachmentName);
-    setInput('');
-    setAttachmentName(undefined);
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+  const submit = async () => {
+    if (!chat || !input.trim() || sending) return;
+    setSending(true);
+    try {
+      await sendMessage(chat.id, quickMode ? `${input}\n\nPlease keep the response concise.` : input, attachmentName);
+      setInput('');
+      setAttachmentName(undefined);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+    } finally {
+      setSending(false);
+    }
   };
 
   const attachFile = async () => {
@@ -102,13 +108,14 @@ export const ChatScreen = ({
           value={input}
           onChangeText={setInput}
           onSubmitEditing={submit}
-          placeholder="Ask anything..."
+          placeholder={sending ? 'ChatGPT is thinking…' : 'Ask anything...'}
           placeholderTextColor={colors.textFaint}
           multiline
           maxLength={4000}
+          editable={!sending}
           style={styles.composer}
         />
-        <Pressable onPress={submit} disabled={!input.trim()} style={[styles.sendButton, !input.trim() && styles.sendButtonDisabled]}>
+        <Pressable onPress={submit} disabled={!input.trim() || sending} style={[styles.sendButton, (!input.trim() || sending) && styles.sendButtonDisabled]}>
           <AppIcon name="arrow-up" size={20} color="#FFFFFF" />
         </Pressable>
       </View>

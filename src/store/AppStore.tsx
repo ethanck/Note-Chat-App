@@ -14,6 +14,7 @@ import {
   Quiz,
 } from '../types';
 import { makeId, previewText, tokenize, topicFromText } from '../utils/text';
+import { completeChatGPTRequest, loadChatGPTAccount } from '../services/chatgptAuth';
 
 type AppStore = {
   data: AppData;
@@ -26,7 +27,7 @@ type AppStore = {
   archiveChat: (id: string) => void;
   toggleChatFavorite: (id: string) => void;
   toggleChatPin: (id: string) => void;
-  sendMessage: (chatId: string, content: string, attachmentName?: string) => void;
+  sendMessage: (chatId: string, content: string, attachmentName?: string) => Promise<void>;
   organizeChatToNotes: (chatId: string) => void;
   createFolder: (name: string, parentId?: string) => string;
   createNote: (note: Partial<Note> & Pick<Note, 'title' | 'content'>) => string;
@@ -45,10 +46,7 @@ type AppStore = {
 
 const AppStoreContext = createContext<AppStore | null>(null);
 
-const assistantReply = (content: string) => {
-  const topic = topicFromText(content);
-  return `Here is a useful starting point for **${topic}**.\n\nI’m running in local preview mode while ChatGPT authorization is being connected. Once that connection is enabled, I’ll be able to reason over your request, search relevant local notes, and automatically organize the result into your folder structure.`;
-};
+const disconnectedReply = 'Connect with ChatGPT in Settings to receive an AI response. Your chats and notes remain local until you choose to connect.';
 
 const bestFolderForText = (folders: Folder[], text: string) => {
   const tokens = new Set(tokenize(text));
@@ -79,9 +77,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [lastAction, setLastAction] = useState<string>();
 
   useEffect(() => {
-    loadAppData()
-      .then((stored) => {
-        if (stored) setData(stored);
+    Promise.all([loadAppData(), loadChatGPTAccount()])
+      .then(([stored, account]) => {
+        if (stored) setData({ ...stored, chatGPTAccount: account || { connected: false } });
+        else if (account) setData((current) => ({ ...current, chatGPTAccount: account }));
       })
       .catch(() => undefined)
       .finally(() => setReady(true));
@@ -144,7 +143,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       chats: current.chats.map((chat) => (chat.id === id ? { ...chat, isPinned: !chat.isPinned } : chat)),
     }));
 
-  const sendMessage = (chatId: string, content: string, attachmentName?: string) => {
+  const sendMessage = async (chatId: string, content: string, attachmentName?: string) => {
     const trimmed = content.trim();
     if (!trimmed) return;
     const now = new Date().toISOString();
@@ -155,10 +154,37 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       createdAt: now,
       attachmentName,
     };
+    const chat = data.chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    update((current) => ({
+      ...current,
+      chats: current.chats.map((item) =>
+        item.id === chatId
+          ? {
+              ...item,
+              title: item.messages.length === 0 ? previewText(trimmed, 32) : item.title,
+              updatedAt: now,
+              messages: [...item.messages, userMessage],
+            }
+          : item,
+      ),
+    }));
+
+    let responseText = disconnectedReply;
+    try {
+      if (data.chatGPTAccount.connected) {
+        responseText = await completeChatGPTRequest({
+          messages: [...chat.messages, userMessage],
+          settings: data.settings,
+        });
+      }
+    } catch (error) {
+      responseText = error instanceof Error ? error.message : 'ChatGPT could not complete that request.';
+    }
     const reply: ChatMessage = {
       id: makeId('message'),
       role: 'assistant',
-      content: assistantReply(trimmed),
+      content: responseText,
       createdAt: new Date(Date.now() + 500).toISOString(),
     };
     update((current) => ({
@@ -167,9 +193,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         chat.id === chatId
           ? {
               ...chat,
-              title: chat.messages.length === 0 ? previewText(trimmed, 32) : chat.title,
-              updatedAt: now,
-              messages: [...chat.messages, userMessage, reply],
+              updatedAt: new Date().toISOString(),
+              messages: [...chat.messages, reply],
             }
           : chat,
       ),

@@ -86,6 +86,11 @@ export type ChatGPTAccount = {
   email?: string;
   displayName?: string;
   connectedAt?: string;
+  subject?: string;
+  clientId?: string;
+  hostId?: string;
+  sharingEnabled?: boolean;
+  model?: string;
 };
 
 export type AppData = {

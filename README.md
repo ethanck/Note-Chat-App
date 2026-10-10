@@ -13,18 +13,20 @@ The original Swift app is kept in its own folder. This repository is a separate 
 - Local generated-quiz flow with scoring.
 - Automatic local chat-to-notes organization with visible additions and proposed deletions.
 - Local SQLite persistence on the device.
-- ChatGPT connection boundary ready for OAuth integration; the current build uses a local preview response until the Sign in with ChatGPT flow is wired to the approved production configuration.
+- Sign in with ChatGPT OAuth using PKCE, ID-token/JWKS verification, SecureStore credentials, token refresh, model discovery, and streamed Responses API requests when the user grants eligible ChatGPT plan usage.
 - Firebase is intentionally not used for notes, folders, or chat content in this first version.
 
 ## Development
 
-Use Node 20 for Expo and Xcode tooling. The version is pinned in `.nvmrc`.
+Use Node 20 for Expo and Xcode tooling. The version is pinned in `.nvmrc`; the machine's default Node version must not be used for CocoaPods or Expo autolinking.
 
 ```sh
 nvm use
 npm install
 npm run start
 ```
+
+In Settings, use **Continue with ChatGPT**. The app opens the system authentication session, requests the identity and ChatGPT-plan permissions separately, and stores the resulting credentials in the iOS Keychain through SecureStore. No API key is requested or stored. ChatGPT plan usage is only available to eligible accounts and does not provide access to the user's ChatGPT conversations.
 
 For the native iOS project:
 
@@ -52,7 +54,6 @@ Simulator builds do not require signing. A physical iPhone or TestFlight archive
 
 ## Planned integrations
 
-- Sign in with ChatGPT for eligible ChatGPT subscription-backed AI usage.
 - Firebase Authentication for the single account session.
 - Optional Firebase sync for app metadata after local-first behavior is validated.
 - iOS share-sheet ingestion for chats copied from other AI apps.

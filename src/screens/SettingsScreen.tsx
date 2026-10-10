@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -6,13 +6,24 @@ import { colors, radii, shadows } from '../theme/theme';
 import { AppIcon, IconButton, Surface } from '../components/Ui';
 import { useAppStore } from '../store/AppStore';
 import { exportAppData } from '../data/storage';
-import { clearChatGPTAccount, saveChatGPTAccount } from '../services/chatgptAuth';
+import { clearChatGPTAccount, openChatGPTUsageSettings, signInWithChatGPT } from '../services/chatgptAuth';
 
 export const SettingsScreen = ({ onClose }: { onClose: () => void }) => {
   const { data, updateSettings, connectChatGPT, disconnectChatGPT } = useAppStore();
+  const [connecting, setConnecting] = useState(false);
 
-  const connect = () => {
-    Alert.alert('Connect with ChatGPT', 'The app is prepared to store this connection in the iOS Keychain. The approved Sign in with ChatGPT OAuth callback will be connected here before production use.', [{ text: 'Got it' }]);
+  const connect = async () => {
+    setConnecting(true);
+    try {
+      const connection = await signInWithChatGPT();
+      connectChatGPT(connection.account);
+      Alert.alert('ChatGPT connected', connection.account.sharingEnabled ? 'Eligible AI requests can now use your ChatGPT plan. Your local notes stay on this device.' : 'Your ChatGPT identity is connected, but plan usage was not enabled. Reconnect from here to approve it.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'ChatGPT sign-in could not be completed.';
+      if (!message.toLowerCase().includes('canceled')) Alert.alert('Could not connect ChatGPT', message);
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const signOut = () => {
@@ -30,7 +41,8 @@ export const SettingsScreen = ({ onClose }: { onClose: () => void }) => {
   return (
     <View style={styles.screen}><View style={styles.header}><IconButton icon="close" onPress={onClose} color={colors.text} accessibilityLabel="Close settings" /><View style={{ flex: 1 }}><Text style={styles.kicker}>PREFERENCES</Text><Text style={styles.title}>Settings</Text></View></View><ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.groupLabel}>ACCOUNT</Text>
-      <Surface style={styles.accountCard}><View style={styles.accountIcon}><AppIcon name="logo-electron" size={22} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.cardTitle}>{data.chatGPTAccount.connected ? data.chatGPTAccount.displayName || 'ChatGPT connected' : 'ChatGPT not connected'}</Text><Text style={styles.cardBody}>{data.chatGPTAccount.connected ? data.chatGPTAccount.email || 'Eligible plan usage enabled' : 'Connect to use your ChatGPT plan without an API key.'}</Text></View>{data.chatGPTAccount.connected ? <Pressable onPress={signOut} style={styles.outlineButton}><Text style={styles.outlineText}>Sign out</Text></Pressable> : <Pressable onPress={connect} style={styles.connectButton}><Text style={styles.connectText}>Connect</Text></Pressable>}</Surface>
+      <Surface style={styles.accountCard}><View style={styles.accountIcon}><AppIcon name="logo-electron" size={22} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.cardTitle}>{data.chatGPTAccount.connected ? data.chatGPTAccount.displayName || 'ChatGPT connected' : 'ChatGPT not connected'}</Text><Text style={styles.cardBody}>{data.chatGPTAccount.connected ? data.chatGPTAccount.email || (data.chatGPTAccount.sharingEnabled ? 'ChatGPT plan usage enabled' : 'Identity connected; plan usage not enabled') : 'Connect to use your ChatGPT plan without an API key.'}</Text></View>{data.chatGPTAccount.connected ? <Pressable onPress={signOut} style={styles.outlineButton}><Text style={styles.outlineText}>Sign out</Text></Pressable> : <Pressable onPress={connect} disabled={connecting} style={[styles.connectButton, connecting && styles.disabledButton]}><Text style={styles.connectText}>{connecting ? 'Opening…' : 'Continue with ChatGPT'}</Text></Pressable>}</Surface>
+      {data.chatGPTAccount.connected && <Pressable onPress={openChatGPTUsageSettings} style={styles.usageRow}><View style={{ flex: 1 }}><Text style={styles.rowTitle}>Manage ChatGPT plan usage</Text><Text style={styles.rowBody}>Review how this app uses your ChatGPT plan.</Text></View><AppIcon name="open-outline" size={17} color={colors.primary} /></Pressable>}
       <Text style={styles.groupLabel}>CHAT PREFERENCES</Text>
       <Surface><PreferenceRow label="Explanation complexity" value={String(data.settings.aiComplexity)} onPress={() => updateSettings({ aiComplexity: data.settings.aiComplexity >= 10 ? 1 : data.settings.aiComplexity + 1 })} hint="Tap to cycle from beginner to expert" /><PreferenceRow label="Personality" value={String(data.settings.aiPersonality)} onPress={() => updateSettings({ aiPersonality: data.settings.aiPersonality >= 10 ? 1 : data.settings.aiPersonality + 1 })} hint="Tap to cycle from direct to playful" /><PreferenceRow label="Response format" value={data.settings.responseFormat} onPress={() => { const options = ['Bullet Points', 'Numbered Lists', 'Paragraphs'] as const; const index = options.indexOf(data.settings.responseFormat); updateSettings({ responseFormat: options[(index + 1) % options.length] }); }} /></Surface>
       <Text style={styles.groupLabel}>LOCAL DATA</Text>
@@ -55,6 +67,7 @@ const styles = StyleSheet.create({
   cardTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
   cardBody: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },
   connectButton: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 },
+  disabledButton: { opacity: 0.6 },
   connectText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   outlineButton: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 8 },
   outlineText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
@@ -63,6 +76,7 @@ const styles = StyleSheet.create({
   valueText: { color: colors.primaryDark, fontSize: 11, fontWeight: '800' },
   settingRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 65, borderBottomWidth: 1, borderBottomColor: colors.border },
   exportRow: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 65 },
+  usageRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primarySoft, borderRadius: 13, padding: 13, marginTop: 10, gap: 10 },
   rowIcon: { width: 33, height: 33, borderRadius: 11, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
   rowBody: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },

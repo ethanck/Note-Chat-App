@@ -30,8 +30,10 @@
     },
     "plugins": [
       "expo-sqlite",
+      "expo-crypto",
       "expo-secure-store",
       "expo-sharing",
+      "expo-web-browser",
       "expo-font"
     ]
   }
