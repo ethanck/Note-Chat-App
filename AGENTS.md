@@ -12,6 +12,7 @@
 - Use Node 20 (`.nvmrc`) and npm. Keep `package-lock.json` synchronized with `package.json`.
 - Before using an Expo or React Native API, verify it against Expo SDK 57 documentation.
 - Prefer Expo-supported modules and keep UI, state, storage, and service code modular.
+- Browser exports require `react-dom` and `react-native-web`; `metro.config.js` keeps Expo SQLite's WebAssembly asset available to the web worker.
 - Document durable architectural decisions briefly in code or `README.md`.
 
 ## Native iOS

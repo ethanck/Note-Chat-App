@@ -20,6 +20,14 @@ export type Attachment = {
   errorMessage?: string;
 };
 
+export type Reference = Attachment & {
+  chatIds: string[];
+  noteIds: string[];
+  folderId?: string;
+  isInInbox: boolean;
+  savedToNotesAt?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
@@ -38,6 +46,7 @@ export type Chat = {
   isPinned: boolean;
   isFavorite: boolean;
   isArchived: boolean;
+  isSaved: boolean;
   messages: ChatMessage[];
 };
 
@@ -115,6 +124,7 @@ export type ChatGPTAccount = {
 
 export type AppData = {
   chats: Chat[];
+  references: Reference[];
   folders: Folder[];
   notes: Note[];
   notebooks: Notebook[];

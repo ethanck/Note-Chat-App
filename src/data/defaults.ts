@@ -11,6 +11,7 @@ const welcomeChat: Chat = {
   isPinned: true,
   isFavorite: true,
   isArchived: false,
+  isSaved: true,
   messages: [
     {
       id: makeId('message'),
@@ -24,6 +25,7 @@ const welcomeChat: Chat = {
 
 export const createDefaultData = (): AppData => ({
   chats: [welcomeChat],
+  references: [],
   folders: [
     { id: makeId('folder'), name: 'Getting Started', createdAt: now, isPinned: true, isFavorite: true },
     { id: makeId('folder'), name: 'Ideas', createdAt: now, isPinned: false, isFavorite: false },

@@ -13,9 +13,11 @@ import {
   NoteChange,
   Notebook,
   Quiz,
+  Reference,
 } from '../types';
 import { makeId, previewText, tokenize, topicFromText } from '../utils/text';
 import { completeChatGPTRequest, loadChatGPTAccount } from '../services/chatgptAuth';
+import { removeStoredAttachment } from '../services/attachments';
 
 type AppStore = {
   data: AppData;
@@ -29,6 +31,7 @@ type AppStore = {
   toggleChatFavorite: (id: string) => void;
   toggleChatPin: (id: string) => void;
   sendMessage: (chatId: string, content: string, attachments?: Attachment[]) => Promise<void>;
+  deleteReference: (id: string) => void;
   organizeChatToNotes: (chatId: string) => void;
   createFolder: (name: string, parentId?: string) => string;
   createNote: (note: Partial<Note> & Pick<Note, 'title' | 'content'>) => string;
@@ -72,6 +75,25 @@ const bestNoteForText = (notes: Note[], text: string) => {
     .sort((a, b) => b.score - a.score)[0];
 };
 
+const withMigrations = (stored: AppData): AppData => ({
+  ...stored,
+  references: stored.references || [],
+  chats: stored.chats.map((chat) => ({ ...chat, isSaved: chat.isSaved ?? false })),
+});
+
+const addReferencesToChat = (references: Reference[], attachments: Attachment[], chatId: string) => {
+  const next = [...references];
+  attachments.forEach((attachment) => {
+    const existing = next.find((reference) => reference.id === attachment.id);
+    if (existing) {
+      existing.chatIds = Array.from(new Set([...existing.chatIds, chatId]));
+      return;
+    }
+    next.push({ ...attachment, chatIds: [chatId], noteIds: [], isInInbox: true });
+  });
+  return next;
+};
+
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [data, setData] = useState<AppData>(() => createDefaultData());
   const [ready, setReady] = useState(false);
@@ -80,7 +102,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     Promise.all([loadAppData(), loadChatGPTAccount()])
       .then(([stored, account]) => {
-        if (stored) setData({ ...stored, chatGPTAccount: account || { connected: false } });
+        if (stored) setData({ ...withMigrations(stored), chatGPTAccount: account || { connected: false } });
         else if (account) setData((current) => ({ ...current, chatGPTAccount: account }));
       })
       .catch(() => undefined)
@@ -109,6 +131,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           isPinned: false,
           isFavorite: false,
           isArchived: false,
+          isSaved: false,
           messages: [],
         },
         ...current.chats,
@@ -123,8 +146,17 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       chats: current.chats.map((chat) => (chat.id === id ? { ...chat, title: title.trim() || chat.title } : chat)),
     }));
 
-  const deleteChat = (id: string) =>
-    update((current) => ({ ...current, chats: current.chats.filter((chat) => chat.id !== id) }));
+  const deleteChat = (id: string) => {
+    const referencesToDelete = data.references.filter((reference) => reference.chatIds.includes(id) && !reference.savedToNotesAt && reference.chatIds.length === 1);
+    update((current) => ({
+      ...current,
+      chats: current.chats.filter((chat) => chat.id !== id),
+      references: current.references
+        .filter((reference) => !referencesToDelete.some((item) => item.id === reference.id))
+        .map((reference) => ({ ...reference, chatIds: reference.chatIds.filter((chatId) => chatId !== id) })),
+    }));
+    void Promise.all(referencesToDelete.map(removeStoredAttachment));
+  };
 
   const archiveChat = (id: string) =>
     update((current) => ({
@@ -159,10 +191,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     if (!chat) return;
     update((current) => ({
       ...current,
+      references: addReferencesToChat(current.references, attachments, chatId),
       chats: current.chats.map((item) =>
         item.id === chatId
           ? {
               ...item,
+              isSaved: false,
               title: item.messages.length === 0 ? previewText(trimmed, 32) : item.title,
               updatedAt: now,
               messages: [...item.messages, userMessage],
@@ -279,11 +313,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         latestChange: change,
       });
       setLastAction(`${action || 'Updated an existing note'} · changes applied automatically`);
-      return;
+      return { noteId: noteMatch.note.id, folderId: targetFolderId };
     }
 
-    createNote({ title: `Notes from ${title}`, content: text, folderId: targetFolderId });
+    const noteId = createNote({ title: `Notes from ${title}`, content: text, folderId: targetFolderId });
     setLastAction(`${action || 'Created a new note'} · changes applied automatically`);
+    return { noteId, folderId: targetFolderId };
   };
 
   const organizeChatToNotes = (chatId: string) => {
@@ -292,7 +327,21 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     const text = chat.messages
       .map((message) => `${message.role === 'user' ? 'Question' : 'Answer'}: ${message.content}`)
       .join('\n\n');
-    organizeTextToNotes(text, chat.title);
+    const result = organizeTextToNotes(text, chat.title);
+    const savedAt = new Date().toISOString();
+    update((current) => ({
+      ...current,
+      chats: current.chats.map((item) => (item.id === chatId ? { ...item, isSaved: true, updatedAt: savedAt } : item)),
+      references: current.references.map((reference) => reference.chatIds.includes(chatId)
+        ? {
+            ...reference,
+            folderId: result?.folderId,
+            isInInbox: false,
+            savedToNotesAt: savedAt,
+            noteIds: result ? Array.from(new Set([...reference.noteIds, result.noteId])) : reference.noteIds,
+          }
+        : reference),
+    }));
   };
 
   const createNotebook = (name: string) => {
@@ -334,6 +383,24 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     setLastAction('Quiz generated from your local notes');
   };
 
+  const deleteReference = (id: string) => {
+    const reference = data.references.find((item) => item.id === id);
+    if (!reference) return;
+    update((current) => ({
+      ...current,
+      references: current.references.filter((item) => item.id !== id),
+      chats: current.chats.map((chat) => ({
+        ...chat,
+        messages: chat.messages.map((message) => ({
+          ...message,
+          attachments: message.attachments?.filter((attachment) => attachment.id !== id),
+        })),
+      })),
+    }));
+    void removeStoredAttachment(reference);
+    setLastAction(`Deleted ${reference.name} and removed its reference links`);
+  };
+
   const updateSettings = (patch: Partial<AppSettings>) =>
     update((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
 
@@ -349,6 +416,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     isPinned: false,
     isFavorite: false,
     isArchived: false,
+    isSaved: false,
     messages: [],
   };
 
@@ -365,6 +433,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       toggleChatFavorite,
       toggleChatPin,
       sendMessage,
+      deleteReference,
       organizeChatToNotes,
       createFolder,
       createNote,

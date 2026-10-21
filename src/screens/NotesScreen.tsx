@@ -1,17 +1,19 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radii, shadows } from '../theme/theme';
 import { useAppStore } from '../store/AppStore';
 import { AppIcon, IconButton, Pill, SearchField, SectionTitle, Surface } from '../components/Ui';
-import { Folder, Note } from '../types';
+import { Folder, Note, Reference } from '../types';
+import { attachmentIcon, formatAttachmentSize } from '../services/attachments';
 import { formatDate, previewText } from '../utils/text';
 
 export const NotesScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
-  const { data, createFolder, createNote, updateNote, toggleNoteFavorite, toggleNotePin } = useAppStore();
+  const { data, createFolder, createNote, updateNote, toggleNoteFavorite, toggleNotePin, deleteReference } = useAppStore();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'All' | 'Pinned' | 'Favorites'>('All');
   const [folderId, setFolderId] = useState<string>();
   const [selectedNoteId, setSelectedNoteId] = useState<string>();
+  const [showInbox, setShowInbox] = useState(false);
   const [prompt, setPrompt] = useState<'note' | 'folder'>();
   const [promptValue, setPromptValue] = useState('');
 
@@ -24,6 +26,7 @@ export const NotesScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
     const matchesFilter = filter === 'All' || (filter === 'Pinned' ? note.isPinned : note.isFavorite);
     return matchesFolder && matchesSearch && matchesFilter;
   }), [data.notes, folderId, query, filter]);
+  const inboxReferences = useMemo(() => data.references.filter((reference) => reference.isInInbox), [data.references]);
 
   const createFromPrompt = () => {
     const value = promptValue.trim();
@@ -38,6 +41,8 @@ export const NotesScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
     return <NoteEditor note={selectedNote} onBack={() => setSelectedNoteId(undefined)} onSave={(patch) => updateNote(selectedNote.id, patch)} onFavorite={() => toggleNoteFavorite(selectedNote.id)} onPin={() => toggleNotePin(selectedNote.id)} folderName={data.folders.find((folder) => folder.id === selectedNote.folderId)?.name} />;
   }
 
+  if (showInbox) return <ReferenceInbox references={inboxReferences} onBack={() => setShowInbox(false)} onDelete={deleteReference} />;
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -51,6 +56,7 @@ export const NotesScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
         <View style={styles.filterRow}>
           {(['All', 'Pinned', 'Favorites'] as const).map((item) => <Pill key={item} label={item} active={filter === item} onPress={() => setFilter(item)} />)}
         </View>
+        {!folderId && inboxReferences.length > 0 && <Pressable onPress={() => setShowInbox(true)} style={styles.inboxCard}><View style={styles.inboxIcon}><AppIcon name="file-tray-full-outline" size={22} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.inboxTitle}>Inbox</Text><Text style={styles.inboxBody}>{inboxReferences.length} unsorted reference{inboxReferences.length === 1 ? '' : 's'} from recent chats</Text></View><AppIcon name="chevron-forward" size={17} color={colors.primary} /></Pressable>}
         {currentFolder && <Pressable onPress={() => setFolderId(currentFolder.parentId)} style={styles.breadcrumb}><AppIcon name="arrow-back" size={15} color={colors.primary} /><Text style={styles.breadcrumbText}>Back to {data.folders.find((folder) => folder.id === currentFolder.parentId)?.name || 'Notes'}</Text></Pressable>}
         <SectionTitle eyebrow={currentFolder ? 'FOLDER' : 'ORGANIZE'} title={currentFolder?.name || 'Your library'} action={<Text style={styles.itemCount}>{visibleFolders.length + visibleNotes.length} items</Text>} />
         {visibleFolders.length > 0 && <View style={styles.folderGrid}>{visibleFolders.map((folder) => <FolderCard key={folder.id} folder={folder} onPress={() => setFolderId(folder.id)} />)}</View>}
@@ -67,6 +73,20 @@ const FolderCard = ({ folder, onPress }: { folder: Folder; onPress: () => void }
     <Text numberOfLines={1} style={styles.folderName}>{folder.name}</Text>
     <Text style={styles.folderMeta}>{folder.isFavorite ? 'Favorite folder' : 'Folder'}</Text>
   </Pressable>
+);
+
+const ReferenceInbox = ({ references, onBack, onDelete }: { references: Reference[]; onBack: () => void; onDelete: (id: string) => void }) => (
+  <View style={styles.screen}>
+    <View style={styles.header}><IconButton icon="arrow-back" onPress={onBack} color={colors.text} accessibilityLabel="Back to notes" /><View style={{ flex: 1 }}><Text style={styles.kicker}>UNSORTED REFERENCES</Text><Text style={styles.title}>Inbox</Text></View></View>
+    <ScrollView contentContainerStyle={styles.content}>
+      <Surface style={styles.inboxIntro}><AppIcon name="information-circle-outline" size={18} color={colors.primary} /><Text style={styles.inboxIntroText}>These files are available to their chats but have not been saved into the note structure yet.</Text></Surface>
+      {references.map((reference) => <ReferenceCard key={reference.id} reference={reference} onDelete={() => Alert.alert('Delete reference?', `${reference.name} will be removed from this device and unlinked from chats and notes.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => onDelete(reference.id) }])} />)}
+    </ScrollView>
+  </View>
+);
+
+const ReferenceCard = ({ reference, onDelete }: { reference: Reference; onDelete: () => void }) => (
+  <Surface style={styles.referenceCard}><View style={styles.referenceIcon}><AppIcon name={attachmentIcon(reference.kind)} size={19} color={colors.primary} /></View><View style={styles.referenceMain}><Text numberOfLines={1} style={styles.referenceName}>{reference.name}</Text><Text style={styles.referenceMeta}>{reference.kind.toUpperCase()} · {formatAttachmentSize(reference.size)} · Local only</Text></View><Pressable onPress={onDelete} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${reference.name}`}><AppIcon name="trash-outline" size={18} color={colors.danger} /></Pressable></Surface>
 );
 
 const NoteCard = ({ note, onPress, onFavorite, onPin, folderName }: { note: Note; onPress: () => void; onFavorite: () => void; onPin: () => void; folderName?: string }) => (
@@ -125,6 +145,17 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 23, fontWeight: '800', letterSpacing: -0.4, marginTop: 2 },
   content: { padding: 16, paddingBottom: 36 },
   filterRow: { flexDirection: 'row', gap: 8, marginVertical: 14 },
+  inboxCard: { flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: colors.primarySoft, borderRadius: radii.md, padding: 13, marginBottom: 18 },
+  inboxIcon: { width: 39, height: 39, borderRadius: 13, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  inboxTitle: { color: colors.primaryDark, fontSize: 14, fontWeight: '800' },
+  inboxBody: { color: colors.textMuted, fontSize: 11, marginTop: 3 },
+  inboxIntro: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, padding: 13, marginBottom: 14, backgroundColor: colors.primarySoft },
+  inboxIntroText: { flex: 1, color: colors.textMuted, fontSize: 12, lineHeight: 18 },
+  referenceCard: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 13, marginBottom: 9 },
+  referenceIcon: { width: 37, height: 37, borderRadius: 12, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  referenceMain: { flex: 1, minWidth: 0 },
+  referenceName: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  referenceMeta: { color: colors.textFaint, fontSize: 10, marginTop: 4 },
   breadcrumb: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 },
   breadcrumbText: { color: colors.primary, fontWeight: '800', fontSize: 13 },
   itemCount: { color: colors.textFaint, fontSize: 12, fontWeight: '700' },

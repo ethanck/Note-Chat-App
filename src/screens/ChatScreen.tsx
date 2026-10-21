@@ -66,7 +66,10 @@ export const ChatScreen = ({
           </View>
         </View>
         <View style={styles.headerActions}>
-          <IconButton icon="document-text-outline" onPress={() => organizeChatToNotes(chat.id)} color={colors.primary} accessibilityLabel="Add chat to notes" />
+          <Pressable onPress={() => organizeChatToNotes(chat.id)} disabled={chat.isSaved || !chat.messages.length} accessibilityRole="button" accessibilityLabel={chat.isSaved ? 'Chat saved to notes' : 'Save chat to notes'} style={[styles.saveChatButton, (chat.isSaved || !chat.messages.length) && styles.saveChatButtonDisabled]}>
+            <AppIcon name="document-text-outline" size={15} color={colors.primary} />
+            <Text style={styles.saveChatText}>{chat.isSaved ? 'Saved' : 'Save'}</Text>
+          </Pressable>
           <IconButton icon="ellipsis-horizontal" onPress={() => Alert.alert('Chat actions', 'Rename, archive, pin, and favorite are available from the chat drawer.')} color={colors.textMuted} accessibilityLabel="Chat actions" />
         </View>
       </View>
@@ -189,6 +192,9 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
+  saveChatButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, height: 34, borderRadius: 10, backgroundColor: colors.primarySoft },
+  saveChatButtonDisabled: { opacity: 0.55 },
+  saveChatText: { color: colors.primaryDark, fontSize: 11, fontWeight: '800' },
   kicker: { color: colors.primary, fontWeight: '800', letterSpacing: 1, fontSize: 9 },
   title: { color: colors.text, fontSize: 17, fontWeight: '800', maxWidth: 190, marginTop: 2 },
   messages: { flex: 1 },
