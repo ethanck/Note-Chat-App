@@ -4,7 +4,6 @@
     "slug": "note-app-chat",
     "scheme": "noteappchat",
     "version": "1.0.0",
-    "jsEngine": "hermes",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -24,9 +23,6 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    },
-    "autolinking": {
-      "legacy_shallowReactNativeLinking": true
     },
     "plugins": [
       "expo-sqlite",

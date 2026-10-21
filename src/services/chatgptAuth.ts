@@ -212,13 +212,13 @@ export const signInWithChatGPT = async (): Promise<ChatGPTConnection> => {
   }
 
   const jwks = createRemoteJWKSet(new URL(JWKS_ENDPOINT));
-  const verified = await jwtVerify(tokenBody.id_token, jwks, {
+  const verified = await jwtVerify(tokenBody.id_token, jwks as unknown as Parameters<typeof jwtVerify>[1], {
     issuer: ISSUER,
     audience: issuedClientId,
-    nonce,
   });
   const claims = verified.payload;
   if (!claims.sub) throw new Error('ChatGPT did not provide a stable account identity.');
+  if (claims.nonce !== nonce) throw new Error('ChatGPT sign-in could not be verified. Please try again.');
   const scopes = (tokenBody.scope || callback.scope || '').split(' ').filter(Boolean);
   const credentials: ChatGPTCredentials = {
     clientId: issuedClientId,
