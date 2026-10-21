@@ -4,6 +4,7 @@ import { loadAppData, saveAppData } from '../data/storage';
 import {
   AppData,
   AppSettings,
+  Attachment,
   Chat,
   ChatMessage,
   ChatGPTAccount,
@@ -27,7 +28,7 @@ type AppStore = {
   archiveChat: (id: string) => void;
   toggleChatFavorite: (id: string) => void;
   toggleChatPin: (id: string) => void;
-  sendMessage: (chatId: string, content: string, attachmentName?: string) => Promise<void>;
+  sendMessage: (chatId: string, content: string, attachments?: Attachment[]) => Promise<void>;
   organizeChatToNotes: (chatId: string) => void;
   createFolder: (name: string, parentId?: string) => string;
   createNote: (note: Partial<Note> & Pick<Note, 'title' | 'content'>) => string;
@@ -143,7 +144,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       chats: current.chats.map((chat) => (chat.id === id ? { ...chat, isPinned: !chat.isPinned } : chat)),
     }));
 
-  const sendMessage = async (chatId: string, content: string, attachmentName?: string) => {
+  const sendMessage = async (chatId: string, content: string, attachments: Attachment[] = []) => {
     const trimmed = content.trim();
     if (!trimmed) return;
     const now = new Date().toISOString();
@@ -152,7 +153,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       role: 'user',
       content: trimmed,
       createdAt: now,
-      attachmentName,
+      attachments: attachments.length ? attachments : undefined,
     };
     const chat = data.chats.find((item) => item.id === chatId);
     if (!chat) return;

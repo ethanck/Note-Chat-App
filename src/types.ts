@@ -2,11 +2,31 @@ export type TabKey = 'chat' | 'notes' | 'quizzes' | 'notebook';
 
 export type ChatRole = 'user' | 'assistant';
 
+export type AttachmentKind = 'text' | 'pdf' | 'word' | 'image';
+
+export type AttachmentProcessingStatus = 'ready' | 'stored' | 'failed';
+
+export type Attachment = {
+  id: string;
+  name: string;
+  localUri: string;
+  mimeType: string;
+  extension: string;
+  kind: AttachmentKind;
+  size?: number;
+  createdAt: string;
+  processingStatus: AttachmentProcessingStatus;
+  extractedText?: string;
+  errorMessage?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
   content: string;
   createdAt: string;
+  attachments?: Attachment[];
+  /** Kept for migration of chats saved before the attachment model existed. */
   attachmentName?: string;
 };
 

@@ -281,6 +281,14 @@ const responseTextFromStream = (raw: string) => {
   return text.trim();
 };
 
+const promptContentForMessage = (message: ChatMessage) => {
+  const extractedAttachments = (message.attachments || [])
+    .filter((attachment) => attachment.extractedText?.trim())
+    .map((attachment) => `Attached text from "${attachment.name}":\n${attachment.extractedText}`)
+    .join('\n\n');
+  return [message.content, extractedAttachments].filter(Boolean).join('\n\n');
+};
+
 export const completeChatGPTRequest = async ({
   messages,
   settings,
@@ -305,7 +313,7 @@ export const completeChatGPTRequest = async ({
     body: JSON.stringify({
       model: credentials.model,
       instructions,
-      input: messages.slice(-24).map((message) => ({ role: message.role, content: message.content })),
+      input: messages.slice(-24).map((message) => ({ role: message.role, content: promptContentForMessage(message) })),
       store: false,
       stream: true,
     }),

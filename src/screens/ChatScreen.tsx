@@ -1,11 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
+import { Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radii, shadows } from '../theme/theme';
-import { Chat, ChatMessage } from '../types';
+import { Attachment, Chat, ChatMessage } from '../types';
 import { useAppStore } from '../store/AppStore';
 import { AppIcon, IconButton, Pill } from '../components/Ui';
 import { formatTime } from '../utils/text';
+import { attachmentIcon, formatAttachmentSize, pickAttachments, removeStoredAttachment } from '../services/attachments';
 
 export const ChatScreen = ({
   chatId,
@@ -18,19 +18,20 @@ export const ChatScreen = ({
   const chat = data.chats.find((item) => item.id === chatId) || data.chats[0];
   const [input, setInput] = useState('');
   const [quickMode, setQuickMode] = useState(false);
-  const [attachmentName, setAttachmentName] = useState<string>();
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const orderedMessages = useMemo(() => [...(chat?.messages || [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [chat]);
 
   const submit = async () => {
-    if (!chat || !input.trim() || sending) return;
+    if (!chat || (!input.trim() && !attachments.length) || sending) return;
+    const message = input.trim() || 'Please review the attached file(s).';
     setSending(true);
     try {
-      await sendMessage(chat.id, quickMode ? `${input}\n\nPlease keep the response concise.` : input, attachmentName);
+      await sendMessage(chat.id, quickMode ? `${message}\n\nPlease keep the response concise.` : message, attachments);
       setInput('');
-      setAttachmentName(undefined);
+      setAttachments([]);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     } finally {
       setSending(false);
@@ -38,11 +39,18 @@ export const ChatScreen = ({
   };
 
   const attachFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ['text/*', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/*', 'audio/*'],
-      copyToCacheDirectory: true,
-    });
-    if (!result.canceled && result.assets?.[0]) setAttachmentName(result.assets[0].name);
+    try {
+      const picked = await pickAttachments();
+      if (picked.length) setAttachments((current) => [...current, ...picked]);
+    } catch (error) {
+      Alert.alert('Could not attach file', error instanceof Error ? error.message : 'Please try selecting the file again.');
+    }
+  };
+
+  const removeSelectedAttachment = async (id: string) => {
+    const attachment = attachments.find((item) => item.id === id);
+    setAttachments((current) => current.filter((item) => item.id !== id));
+    if (attachment) await removeStoredAttachment(attachment);
   };
 
   if (!chat) return null;
@@ -88,12 +96,16 @@ export const ChatScreen = ({
         )}
       </ScrollView>
 
-      {attachmentName && (
-        <View style={styles.attachmentPill}>
-          <AppIcon name="attach" size={15} color={colors.primary} />
-          <Text style={styles.attachmentText} numberOfLines={1}>{attachmentName}</Text>
-          <Pressable onPress={() => setAttachmentName(undefined)}><AppIcon name="close-circle" size={16} color={colors.textMuted} /></Pressable>
-        </View>
+      {attachments.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachmentList}>
+          {attachments.map((attachment) => (
+            <AttachmentChip
+              key={attachment.id}
+              attachment={attachment}
+              onRemove={() => void removeSelectedAttachment(attachment.id)}
+            />
+          ))}
+        </ScrollView>
       )}
       <View style={styles.modeRow}>
         <Text style={styles.modeLabel}>Response style</Text>
@@ -115,7 +127,7 @@ export const ChatScreen = ({
           editable={!sending}
           style={styles.composer}
         />
-        <Pressable onPress={submit} disabled={!input.trim() || sending} style={[styles.sendButton, (!input.trim() || sending) && styles.sendButtonDisabled]}>
+        <Pressable onPress={submit} disabled={(!input.trim() && !attachments.length) || sending} style={[styles.sendButton, ((!input.trim() && !attachments.length) || sending) && styles.sendButtonDisabled]}>
           <AppIcon name="arrow-up" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
@@ -138,14 +150,39 @@ const MessageBubble = ({ message }: { message: ChatMessage }) => {
       {!user && <View style={styles.aiAvatar}><AppIcon name="sparkles" size={14} color="#FFFFFF" /></View>}
       <View style={[styles.bubble, user ? styles.userBubble : styles.aiBubble]}>
         <Text style={[styles.messageText, user && styles.userMessageText]}>{message.content}</Text>
+        {message.attachments?.map((attachment) => <MessageAttachment key={attachment.id} attachment={attachment} user={user} />)}
+        {!message.attachments?.length && message.attachmentName && (
+          <View style={styles.legacyAttachment}><AppIcon name="attach" size={12} color={user ? '#FFFFFF' : colors.primary} /><Text style={[styles.legacyAttachmentText, user && styles.userMessageText]}>{message.attachmentName}</Text></View>
+        )}
         <View style={styles.messageMeta}>
-          {message.attachmentName && <AppIcon name="attach" size={12} color={user ? 'rgba(255,255,255,.75)' : colors.textMuted} />}
           <Text style={[styles.time, user && styles.userTime]}>{formatTime(message.createdAt)}</Text>
         </View>
       </View>
     </View>
   );
 };
+
+const AttachmentChip = ({ attachment, onRemove }: { attachment: Attachment; onRemove: () => void }) => (
+  <View style={styles.attachmentChip}>
+    <AppIcon name={attachmentIcon(attachment.kind)} size={15} color={colors.primary} />
+    <View style={styles.attachmentChipText}>
+      <Text numberOfLines={1} style={styles.attachmentText}>{attachment.name}</Text>
+      <Text style={styles.attachmentMeta}>{attachment.kind.toUpperCase()} · {formatAttachmentSize(attachment.size)}</Text>
+    </View>
+    <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel={`Remove ${attachment.name}`}><AppIcon name="close-circle" size={17} color={colors.textMuted} /></Pressable>
+  </View>
+);
+
+const MessageAttachment = ({ attachment, user }: { attachment: Attachment; user: boolean }) => (
+  <View style={[styles.messageAttachment, user && styles.userMessageAttachment]}>
+    {attachment.kind === 'image' && <Image source={{ uri: attachment.localUri }} style={styles.messageAttachmentImage} />}
+    <AppIcon name={attachmentIcon(attachment.kind)} size={14} color={user ? '#FFFFFF' : colors.primary} />
+    <View style={{ flex: 1 }}>
+      <Text numberOfLines={1} style={[styles.messageAttachmentName, user && styles.userMessageText]}>{attachment.name}</Text>
+      <Text style={[styles.messageAttachmentMeta, user && styles.userAttachmentMeta]}>{attachment.processingStatus === 'ready' ? 'Text ready for AI context' : attachment.processingStatus === 'failed' ? 'Stored locally · text extraction failed' : 'Stored locally'} · {formatAttachmentSize(attachment.size)}</Text>
+    </View>
+  </View>
+);
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
@@ -176,8 +213,19 @@ const styles = StyleSheet.create({
   userTime: { color: 'rgba(255,255,255,.72)' },
   actionToast: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.successSoft, borderRadius: 14, padding: 12 },
   actionToastText: { flex: 1, color: colors.success, fontSize: 12, fontWeight: '700' },
-  attachmentPill: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 15, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: colors.primarySoft, borderRadius: radii.md },
-  attachmentText: { flex: 1, color: colors.primaryDark, fontSize: 12, fontWeight: '700' },
+  attachmentList: { gap: 8, paddingHorizontal: 15, paddingVertical: 7 },
+  attachmentChip: { flexDirection: 'row', alignItems: 'center', gap: 7, width: 220, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: colors.primarySoft, borderRadius: radii.md },
+  attachmentChipText: { flex: 1, minWidth: 0 },
+  attachmentText: { color: colors.primaryDark, fontSize: 12, fontWeight: '700' },
+  attachmentMeta: { color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 2 },
+  messageAttachment: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 9, padding: 9, borderRadius: 10, backgroundColor: colors.primarySoft },
+  messageAttachmentImage: { width: 34, height: 34, borderRadius: 7 },
+  userMessageAttachment: { backgroundColor: 'rgba(255,255,255,.16)' },
+  messageAttachmentName: { color: colors.primaryDark, fontSize: 11, fontWeight: '800' },
+  messageAttachmentMeta: { color: colors.textMuted, fontSize: 9, marginTop: 2 },
+  userAttachmentMeta: { color: 'rgba(255,255,255,.75)' },
+  legacyAttachment: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+  legacyAttachmentText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   modeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 5 },
   modeLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
   modePills: { flexDirection: 'row', gap: 6 },

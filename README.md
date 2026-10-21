@@ -12,6 +12,7 @@ The original Swift app is kept in its own folder. This repository is a separate 
 - Multiple local notebooks with an Add to Notes workflow.
 - Local generated-quiz flow with scoring.
 - Automatic local chat-to-notes organization with visible additions and proposed deletions.
+- Local attachment intake for TXT, Markdown, PDF, DOC/DOCX, and images. Files are copied into the app sandbox; TXT/Markdown text is extracted locally and included in AI context only when sent.
 - Local SQLite persistence on the device.
 - Sign in with ChatGPT OAuth using PKCE, ID-token/JWKS verification, SecureStore credentials, token refresh, model discovery, and streamed Responses API requests when the user grants eligible ChatGPT plan usage.
 - Firebase is intentionally not used for notes, folders, or chat content in this first version.
