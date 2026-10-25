@@ -20,6 +20,7 @@ export const ChatScreen = ({
   const [quickMode, setQuickMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const orderedMessages = useMemo(() => [...(chat?.messages || [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [chat]);
@@ -53,6 +54,18 @@ export const ChatScreen = ({
     if (attachment) await removeStoredAttachment(attachment);
   };
 
+  const saveChat = async () => {
+    if (!chat || organizing) return;
+    setOrganizing(true);
+    try {
+      const result = await organizeChatToNotes(chat.id);
+      if (result === 'review') Alert.alert('Organization needs review', 'The chat was not marked as saved yet. Open Notes to review the proposed folder and note changes.');
+      if (result === 'failed') Alert.alert('Could not organize chat', 'The proposed organization could not be applied safely. Your chat remains unchanged.');
+    } finally {
+      setOrganizing(false);
+    }
+  };
+
   if (!chat) return null;
 
   return (
@@ -66,9 +79,9 @@ export const ChatScreen = ({
           </View>
         </View>
         <View style={styles.headerActions}>
-          <Pressable onPress={() => organizeChatToNotes(chat.id)} disabled={chat.isSaved || !chat.messages.length} accessibilityRole="button" accessibilityLabel={chat.isSaved ? 'Chat saved to notes' : 'Save chat to notes'} style={[styles.saveChatButton, (chat.isSaved || !chat.messages.length) && styles.saveChatButtonDisabled]}>
+          <Pressable onPress={() => void saveChat()} disabled={chat.isSaved || !chat.messages.length || organizing} accessibilityRole="button" accessibilityLabel={chat.isSaved ? 'Chat saved to notes' : 'Save chat to notes'} style={[styles.saveChatButton, (chat.isSaved || !chat.messages.length || organizing) && styles.saveChatButtonDisabled]}>
             <AppIcon name="document-text-outline" size={15} color={colors.primary} />
-            <Text style={styles.saveChatText}>{chat.isSaved ? 'Saved' : 'Save'}</Text>
+            <Text style={styles.saveChatText}>{chat.isSaved ? 'Saved' : organizing ? 'Saving…' : 'Save'}</Text>
           </Pressable>
           <IconButton icon="ellipsis-horizontal" onPress={() => Alert.alert('Chat actions', 'Rename, archive, pin, and favorite are available from the chat drawer.')} color={colors.textMuted} accessibilityLabel="Chat actions" />
         </View>

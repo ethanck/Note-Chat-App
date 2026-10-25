@@ -289,12 +289,16 @@ const promptContentForMessage = (message: ChatMessage) => {
   return [message.content, extractedAttachments].filter(Boolean).join('\n\n');
 };
 
-export const completeChatGPTRequest = async ({
-  messages,
-  settings,
+type ResponsesInput = Array<{ role: 'user' | 'assistant' | 'system'; content: string }> | string;
+
+const requestChatGPT = async ({
+  instructions,
+  input,
+  text,
 }: {
-  messages: ChatMessage[];
-  settings: AppSettings;
+  instructions: string;
+  input: ResponsesInput;
+  text?: { format: Record<string, unknown> };
 }) => {
   let credentials = await getUsableCredentials();
   if (!credentials.scopes.includes('chatgpt.tokens.use.direct')) {
@@ -306,16 +310,16 @@ export const completeChatGPTRequest = async ({
     credentials = { ...credentials, model: model.slug };
     await saveChatGPTCredentials(credentials);
   }
-  const instructions = `You are Note App Chat, a thoughtful study companion. Use an explanation complexity of ${settings.aiComplexity}/10 and a personality of ${settings.aiPersonality}/10. Format responses as ${settings.responseFormat}. Be clear and practical. Do not claim to have access to the user's local files unless they were included in the conversation.`;
   const response = await fetch(RESPONSES_ENDPOINT, {
     method: 'POST',
     headers: { Authorization: `Bearer ${credentials.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: credentials.model,
       instructions,
-      input: messages.slice(-24).map((message) => ({ role: message.role, content: promptContentForMessage(message) })),
+      input,
       store: false,
       stream: true,
+      ...(text ? { text } : {}),
     }),
   });
   const raw = await response.text();
@@ -330,6 +334,43 @@ export const completeChatGPTRequest = async ({
     throw new Error(message);
   }
   return responseTextFromStream(raw);
+};
+
+export const completeChatGPTRequest = async ({
+  messages,
+  settings,
+}: {
+  messages: ChatMessage[];
+  settings: AppSettings;
+}) => {
+  const instructions = `You are Note App Chat, a thoughtful study companion. Use an explanation complexity of ${settings.aiComplexity}/10 and a personality of ${settings.aiPersonality}/10. Format responses as ${settings.responseFormat}. Be clear and practical. Do not claim to have access to the user's local files unless they were included in the conversation.`;
+  return requestChatGPT({
+    instructions,
+    input: messages.slice(-24).map((message) => ({ role: message.role, content: promptContentForMessage(message) })),
+  });
+};
+
+export const completeStructuredChatGPTRequest = async <T>({
+  instructions,
+  input,
+  schema,
+  name,
+}: {
+  instructions: string;
+  input: ResponsesInput;
+  schema: Record<string, unknown>;
+  name: string;
+}) => {
+  const raw = await requestChatGPT({
+    instructions,
+    input,
+    text: { format: { type: 'json_schema', name, strict: true, schema } },
+  });
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error('ChatGPT returned an invalid organization plan. Please try saving again.');
+  }
 };
 
 export const openChatGPTUsageSettings = () => WebBrowser.openBrowserAsync('https://chatgpt.com/#settings/usage');

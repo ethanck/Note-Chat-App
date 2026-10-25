@@ -28,6 +28,34 @@ export type Reference = Attachment & {
   savedToNotesAt?: string;
 };
 
+export type OrganizationAction = 'append' | 'create' | 'split' | 'link' | 'ask_user';
+
+export type OrganizationPlan = {
+  action: OrganizationAction;
+  confidence: number;
+  rationale: string;
+  needsFullText: boolean;
+  targetNoteId: string | null;
+  targetFolderId: string | null;
+  newFolderName: string | null;
+  newNoteTitle: string | null;
+  rewrittenContent: string | null;
+  removedContent: string | null;
+  splitFolderName: string | null;
+  splitNotes: Array<{ title: string; content: string }>;
+  linkNoteIds: string[];
+};
+
+export type OrganizationProposal = {
+  id: string;
+  chatId: string;
+  chatTitle: string;
+  createdAt: string;
+  status: 'pending' | 'applied' | 'dismissed';
+  plan: OrganizationPlan;
+  referenceIds: string[];
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
@@ -57,6 +85,7 @@ export type Folder = {
   createdAt: string;
   isPinned: boolean;
   isFavorite: boolean;
+  isLocked?: boolean;
 };
 
 export type NoteChange = {
@@ -75,6 +104,9 @@ export type Note = {
   updatedAt: string;
   isPinned: boolean;
   isFavorite: boolean;
+  isLocked?: boolean;
+  referenceIds?: string[];
+  relatedNoteIds?: string[];
   latestChange?: NoteChange;
 };
 
@@ -108,6 +140,8 @@ export type AppSettings = {
   aiPersonality: number;
   responseFormat: 'Bullet Points' | 'Numbered Lists' | 'Paragraphs';
   notebookFont: 'System' | 'Serif' | 'Monospace';
+  organizationMode: 'automatic' | 'review';
+  organizationConfidenceThreshold: number;
 };
 
 export type ChatGPTAccount = {
@@ -129,6 +163,7 @@ export type AppData = {
   notes: Note[];
   notebooks: Notebook[];
   quizzes: Quiz[];
+  organizationProposals: OrganizationProposal[];
   settings: AppSettings;
   chatGPTAccount: ChatGPTAccount;
 };

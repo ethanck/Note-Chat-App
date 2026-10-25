@@ -12,12 +12,15 @@ import {
   Note,
   NoteChange,
   Notebook,
+  OrganizationPlan,
+  OrganizationProposal,
   Quiz,
   Reference,
 } from '../types';
 import { makeId, previewText, tokenize, topicFromText } from '../utils/text';
 import { completeChatGPTRequest, loadChatGPTAccount } from '../services/chatgptAuth';
 import { removeStoredAttachment } from '../services/attachments';
+import { mergeReferenceIds, requestOrganizationPlan } from '../services/organization';
 
 type AppStore = {
   data: AppData;
@@ -32,12 +35,16 @@ type AppStore = {
   toggleChatPin: (id: string) => void;
   sendMessage: (chatId: string, content: string, attachments?: Attachment[]) => Promise<void>;
   deleteReference: (id: string) => void;
-  organizeChatToNotes: (chatId: string) => void;
+  organizeChatToNotes: (chatId: string) => Promise<'saved' | 'review' | 'failed'>;
+  applyOrganizationProposal: (id: string) => void;
+  dismissOrganizationProposal: (id: string) => void;
   createFolder: (name: string, parentId?: string) => string;
   createNote: (note: Partial<Note> & Pick<Note, 'title' | 'content'>) => string;
   updateNote: (id: string, patch: Partial<Note>) => void;
   toggleNoteFavorite: (id: string) => void;
   toggleNotePin: (id: string) => void;
+  toggleNoteLocked: (id: string) => void;
+  toggleFolderLocked: (id: string) => void;
   createNotebook: (name: string) => string;
   updateNotebook: (id: string, patch: Partial<Notebook>) => void;
   addNotebookToNotes: (id: string) => void;
@@ -78,7 +85,15 @@ const bestNoteForText = (notes: Note[], text: string) => {
 const withMigrations = (stored: AppData): AppData => ({
   ...stored,
   references: stored.references || [],
+  organizationProposals: stored.organizationProposals || [],
   chats: stored.chats.map((chat) => ({ ...chat, isSaved: chat.isSaved ?? false })),
+  folders: stored.folders.map((folder) => ({ ...folder, isLocked: folder.isLocked ?? false })),
+  notes: stored.notes.map((note) => ({ ...note, isLocked: note.isLocked ?? false, referenceIds: note.referenceIds || [], relatedNoteIds: note.relatedNoteIds || [] })),
+  settings: {
+    ...stored.settings,
+    organizationMode: stored.settings.organizationMode || 'automatic',
+    organizationConfidenceThreshold: stored.settings.organizationConfidenceThreshold ?? 0.85,
+  },
 });
 
 const addReferencesToChat = (references: Reference[], attachments: Attachment[], chatId: string) => {
@@ -92,6 +107,122 @@ const addReferencesToChat = (references: Reference[], attachments: Attachment[],
     next.push({ ...attachment, chatIds: [chatId], noteIds: [], isInInbox: true });
   });
   return next;
+};
+
+const folderIsLocked = (folders: Folder[], folderId?: string) => {
+  let currentId = folderId;
+  while (currentId) {
+    const folder = folders.find((item) => item.id === currentId);
+    if (!folder) return false;
+    if (folder.isLocked) return true;
+    currentId = folder.parentId;
+  }
+  return false;
+};
+
+const chatText = (chat: Chat) => chat.messages
+  .map((message) => `${message.role === 'user' ? 'Question' : 'Answer'}: ${message.content}`)
+  .join('\n\n');
+
+const applyOrganizationPlan = (current: AppData, chatId: string, plan: OrganizationPlan): { data: AppData; noteIds: string[]; folderId?: string; label: string } => {
+  const chat = current.chats.find((item) => item.id === chatId);
+  if (!chat) return { data: current, noteIds: [], label: 'Chat could not be found' };
+  const now = new Date().toISOString();
+  const notes = [...current.notes];
+  const folders = [...current.folders];
+  const addedNoteIds: string[] = [];
+  let targetFolderId: string | undefined;
+  let label = 'Saved conversation to Notes';
+  const incomingReferenceIds = current.references.filter((reference) => reference.chatIds.includes(chatId)).map((reference) => reference.id);
+
+  const addFolder = (name: string, parentId?: string) => {
+    const id = makeId('folder');
+    folders.push({ id, name: name.trim() || 'Chat Notes', parentId, createdAt: now, isPinned: false, isFavorite: false, isLocked: false });
+    return id;
+  };
+
+  const addNote = (title: string, content: string, folderId?: string, relatedNoteIds: string[] = []) => {
+    const id = makeId('note');
+    notes.push({
+      id,
+      title: title.trim() || 'Notes from conversation',
+      content: content.trim() || chatText(chat),
+      folderId,
+      createdAt: now,
+      updatedAt: now,
+      isPinned: false,
+      isFavorite: false,
+      isLocked: false,
+      referenceIds: incomingReferenceIds,
+      relatedNoteIds,
+    });
+    addedNoteIds.push(id);
+    return id;
+  };
+
+  const requestedFolder = plan.targetFolderId && folders.find((folder) => folder.id === plan.targetFolderId);
+  if (requestedFolder && !folderIsLocked(folders, requestedFolder.id)) targetFolderId = requestedFolder.id;
+
+  if (plan.action === 'append' && plan.targetNoteId) {
+    const target = notes.find((note) => note.id === plan.targetNoteId);
+    if (target && !target.isLocked && !folderIsLocked(folders, target.folderId)) {
+      const rewritten = plan.rewrittenContent?.trim() || `${target.content.trim()}\n\n${chatText(chat)}`;
+      notes.splice(notes.indexOf(target), 1, {
+        ...target,
+        content: rewritten,
+        updatedAt: now,
+        referenceIds: mergeReferenceIds(target.referenceIds, incomingReferenceIds),
+        latestChange: {
+          added: rewritten === target.content ? chatText(chat) : rewritten,
+          removed: plan.removedContent || (rewritten !== target.content ? target.content : undefined),
+          createdAt: now,
+        },
+      });
+      addedNoteIds.push(target.id);
+      targetFolderId = target.folderId;
+      label = `Updated “${target.title}”`;
+    }
+  } else if (plan.action === 'create') {
+    if (!targetFolderId && plan.newFolderName) targetFolderId = addFolder(plan.newFolderName);
+    addNote(plan.newNoteTitle || chat.title, plan.rewrittenContent || chatText(chat), targetFolderId);
+    label = targetFolderId ? 'Created a new organized note' : 'Created a new note in Inbox';
+  } else if (plan.action === 'split' && plan.targetNoteId && plan.splitNotes.length >= 2) {
+    const source = notes.find((note) => note.id === plan.targetNoteId);
+    if (source && !source.isLocked && !folderIsLocked(folders, source.folderId)) {
+      const splitFolderId = plan.splitFolderName ? addFolder(plan.splitFolderName, source.folderId) : source.folderId;
+      const sourceIndex = notes.indexOf(source);
+      notes.splice(sourceIndex, 1);
+      const newIds = plan.splitNotes.map((item) => addNote(item.title, item.content, splitFolderId, []));
+      newIds.forEach((id) => {
+        const note = notes.find((item) => item.id === id);
+        if (note) notes.splice(notes.indexOf(note), 1, { ...note, relatedNoteIds: newIds.filter((otherId) => otherId !== id), referenceIds: mergeReferenceIds(source.referenceIds, incomingReferenceIds) });
+      });
+      targetFolderId = splitFolderId;
+      label = plan.splitFolderName ? `Split “${source.title}” into a new folder` : `Split “${source.title}” in place`;
+    }
+  } else if (plan.action === 'link') {
+    const linkIds = Array.from(new Set([plan.targetNoteId, ...plan.linkNoteIds].filter(Boolean) as string[]));
+    const validIds = linkIds.filter((id) => notes.some((note) => note.id === id));
+    validIds.forEach((id) => {
+      const note = notes.find((item) => item.id === id);
+      if (note) notes.splice(notes.indexOf(note), 1, { ...note, relatedNoteIds: mergeReferenceIds(note.relatedNoteIds, validIds.filter((otherId) => otherId !== id)), updatedAt: now });
+    });
+    addedNoteIds.push(...validIds);
+    label = validIds.length > 1 ? 'Linked related notes' : 'Saved conversation with no note link';
+  }
+
+  if (!addedNoteIds.length && plan.action !== 'link') return { data: current, noteIds: [], label: 'The proposed organization could not be applied safely' };
+  const savedReferenceAt = new Date().toISOString();
+  const next: AppData = {
+    ...current,
+    folders,
+    notes,
+    chats: current.chats.map((item) => item.id === chatId ? { ...item, isSaved: true, updatedAt: savedReferenceAt } : item),
+    references: current.references.map((reference) => reference.chatIds.includes(chatId)
+      ? { ...reference, folderId: targetFolderId, isInInbox: false, savedToNotesAt: savedReferenceAt, noteIds: mergeReferenceIds(reference.noteIds, addedNoteIds) }
+      : reference),
+  };
+  return { data: next, noteIds: addedNoteIds, folderId: targetFolderId, label };
 };
 
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
@@ -242,7 +373,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       ...current,
       folders: [
         ...current.folders,
-        { id, name: name.trim() || 'Untitled Folder', parentId, createdAt: new Date().toISOString(), isPinned: false, isFavorite: false },
+        { id, name: name.trim() || 'Untitled Folder', parentId, createdAt: new Date().toISOString(), isPinned: false, isFavorite: false, isLocked: false },
       ],
     }));
     return id;
@@ -265,6 +396,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           updatedAt: now,
           isPinned: note.isPinned ?? false,
           isFavorite: note.isFavorite ?? false,
+          isLocked: note.isLocked ?? false,
+          referenceIds: note.referenceIds || [],
+          relatedNoteIds: note.relatedNoteIds || [],
           latestChange: note.latestChange,
         },
       ],
@@ -285,6 +419,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
   const toggleNotePin = (id: string) =>
     updateNote(id, { isPinned: !data.notes.find((note) => note.id === id)?.isPinned });
+
+  const toggleNoteLocked = (id: string) =>
+    updateNote(id, { isLocked: !data.notes.find((note) => note.id === id)?.isLocked });
+
+  const toggleFolderLocked = (id: string) =>
+    update((current) => ({
+      ...current,
+      folders: current.folders.map((folder) => folder.id === id ? { ...folder, isLocked: !folder.isLocked } : folder),
+    }));
 
   const organizeTextToNotes = (text: string, title: string) => {
     const topic = topicFromText(text);
@@ -321,27 +464,56 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     return { noteId, folderId: targetFolderId };
   };
 
-  const organizeChatToNotes = (chatId: string) => {
+  const applyPlanForChat = (chatId: string, plan: OrganizationPlan) => {
+    const result = applyOrganizationPlan(data, chatId, plan);
+    if (result.data === data) {
+      setLastAction(result.label);
+      return false;
+    }
+    update(() => result.data);
+    setLastAction(`${result.label} · confidence ${Math.round(plan.confidence * 100)}%`);
+    return true;
+  };
+
+  const organizeChatToNotes = async (chatId: string): Promise<'saved' | 'review' | 'failed'> => {
     const chat = data.chats.find((item) => item.id === chatId);
-    if (!chat) return;
-    const text = chat.messages
-      .map((message) => `${message.role === 'user' ? 'Question' : 'Answer'}: ${message.content}`)
-      .join('\n\n');
-    const result = organizeTextToNotes(text, chat.title);
-    const savedAt = new Date().toISOString();
+    if (!chat || !chat.messages.length) return 'failed';
+    const plan = await requestOrganizationPlan({ chatTitle: chat.title, chatText: chatText(chat), data });
+    const shouldReview = data.settings.organizationMode === 'review' || plan.action === 'ask_user' || plan.confidence < data.settings.organizationConfidenceThreshold;
+    if (shouldReview) {
+      const proposal: OrganizationProposal = {
+        id: makeId('organization-proposal'),
+        chatId,
+        chatTitle: chat.title,
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        plan,
+        referenceIds: data.references.filter((reference) => reference.chatIds.includes(chatId)).map((reference) => reference.id),
+      };
+      update((current) => ({ ...current, organizationProposals: [...current.organizationProposals, proposal] }));
+      setLastAction(`Organization proposal ready for “${chat.title}” · review required`);
+      return 'review';
+    }
+    return applyPlanForChat(chatId, plan) ? 'saved' : 'failed';
+  };
+
+  const applyOrganizationProposal = (id: string) => {
+    const proposal = data.organizationProposals.find((item) => item.id === id && item.status === 'pending');
+    if (!proposal) return;
+    if (applyPlanForChat(proposal.chatId, proposal.plan)) {
+      update((current) => ({
+        ...current,
+        organizationProposals: current.organizationProposals.map((item) => item.id === id ? { ...item, status: 'applied' } : item),
+      }));
+    }
+  };
+
+  const dismissOrganizationProposal = (id: string) => {
     update((current) => ({
       ...current,
-      chats: current.chats.map((item) => (item.id === chatId ? { ...item, isSaved: true, updatedAt: savedAt } : item)),
-      references: current.references.map((reference) => reference.chatIds.includes(chatId)
-        ? {
-            ...reference,
-            folderId: result?.folderId,
-            isInInbox: false,
-            savedToNotesAt: savedAt,
-            noteIds: result ? Array.from(new Set([...reference.noteIds, result.noteId])) : reference.noteIds,
-          }
-        : reference),
+      organizationProposals: current.organizationProposals.map((item) => item.id === id ? { ...item, status: 'dismissed' } : item),
     }));
+    setLastAction('Organization proposal dismissed; the chat remains unsaved to Notes');
   };
 
   const createNotebook = (name: string) => {
@@ -435,11 +607,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       sendMessage,
       deleteReference,
       organizeChatToNotes,
+      applyOrganizationProposal,
+      dismissOrganizationProposal,
       createFolder,
       createNote,
       updateNote,
       toggleNoteFavorite,
       toggleNotePin,
+      toggleNoteLocked,
+      toggleFolderLocked,
       createNotebook,
       updateNotebook,
       addNotebookToNotes,

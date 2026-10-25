@@ -27,8 +27,8 @@ export const createDefaultData = (): AppData => ({
   chats: [welcomeChat],
   references: [],
   folders: [
-    { id: makeId('folder'), name: 'Getting Started', createdAt: now, isPinned: true, isFavorite: true },
-    { id: makeId('folder'), name: 'Ideas', createdAt: now, isPinned: false, isFavorite: false },
+    { id: makeId('folder'), name: 'Getting Started', createdAt: now, isPinned: true, isFavorite: true, isLocked: false },
+    { id: makeId('folder'), name: 'Ideas', createdAt: now, isPinned: false, isFavorite: false, isLocked: false },
   ],
   notes: [
     {
@@ -41,6 +41,9 @@ export const createDefaultData = (): AppData => ({
       updatedAt: now,
       isPinned: true,
       isFavorite: true,
+      isLocked: false,
+      referenceIds: [],
+      relatedNoteIds: [],
     },
   ],
   notebooks: [
@@ -53,11 +56,14 @@ export const createDefaultData = (): AppData => ({
     },
   ],
   quizzes: [],
+  organizationProposals: [],
   settings: {
     aiComplexity: 5,
     aiPersonality: 6,
     responseFormat: 'Bullet Points',
     notebookFont: 'System',
+    organizationMode: 'automatic',
+    organizationConfidenceThreshold: 0.85,
   },
   chatGPTAccount: { connected: false },
 });
