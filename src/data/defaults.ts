@@ -2,6 +2,7 @@ import { AppData, Chat } from '../types';
 import { makeId } from '../utils/text';
 
 const now = new Date().toISOString();
+const inboxFolderId = makeId('folder');
 
 const welcomeChat: Chat = {
   id: makeId('chat'),
@@ -27,8 +28,7 @@ export const createDefaultData = (): AppData => ({
   chats: [welcomeChat],
   references: [],
   folders: [
-    { id: makeId('folder'), name: 'Getting Started', createdAt: now, isPinned: true, isFavorite: true, isLocked: false },
-    { id: makeId('folder'), name: 'Ideas', createdAt: now, isPinned: false, isFavorite: false, isLocked: false },
+    { id: inboxFolderId, name: 'Inbox', createdAt: now, isPinned: true, isFavorite: true, isLocked: false },
   ],
   notes: [
     {
@@ -36,7 +36,7 @@ export const createDefaultData = (): AppData => ({
       title: 'How this workspace works',
       content:
         '# Your learning workspace\n\n- Chat with your AI tutor\n- Save useful conversations into structured notes\n- Create quizzes when you are ready to test yourself\n- Keep a scratchpad for ideas and writing',
-      folderId: undefined,
+      folderId: inboxFolderId,
       createdAt: now,
       updatedAt: now,
       isPinned: true,
