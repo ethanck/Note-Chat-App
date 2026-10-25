@@ -1,7 +1,7 @@
 PODS:
   - EXConstants (57.0.22):
     - ExpoModulesCore
-  - Expo (57.0.30):
+  - Expo (57.0.31):
     - ExpoModulesCore
     - ExpoModulesJSI
     - hermes-engine
@@ -43,7 +43,7 @@ PODS:
     - ExpoModulesCore
   - ExpoLogBox (57.0.4):
     - React-Core
-  - ExpoModulesCore (57.0.23):
+  - ExpoModulesCore (57.0.24):
     - ExpoModulesJSI
     - hermes-engine
     - RCTRequired
@@ -67,15 +67,15 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - ExpoModulesJSI (57.1.2):
+  - ExpoModulesJSI (57.1.3):
     - React-Core
     - ReactCommon
-  - ExpoModulesWorklets (57.0.23):
+  - ExpoModulesWorklets (57.0.24):
     - ExpoModulesCore
     - ExpoModulesJSI
   - ExpoSecureStore (57.0.4):
     - ExpoModulesCore
-  - ExpoSharing (57.0.23):
+  - ExpoSharing (57.0.24):
     - ExpoModulesCore
   - ExpoSQLite (57.0.4):
     - ExpoModulesCore
@@ -1913,11 +1913,11 @@ DEPENDENCIES:
   - ExpoAsset (from `../node_modules/expo/node_modules/expo-asset/ios`)
   - ExpoCrypto (from `../node_modules/expo-crypto/ios`)
   - ExpoDocumentPicker (from `../node_modules/expo-document-picker/ios`)
-  - "ExpoDomWebView (from `../node_modules/expo/node_modules/@expo/dom-webview/ios`)"
+  - "ExpoDomWebView (from `../node_modules/@expo/dom-webview/ios`)"
   - ExpoFileSystem (from `../node_modules/expo-file-system/ios/ExpoFileSystem.podspec`)
   - ExpoFont (from `../node_modules/expo-font/ios/ExpoFont.podspec`)
   - ExpoKeepAwake (from `../node_modules/expo/node_modules/expo-keep-awake/ios`)
-  - "ExpoLogBox (from `../node_modules/expo/node_modules/@expo/log-box`)"
+  - "ExpoLogBox (from `../node_modules/@expo/log-box`)"
   - ExpoModulesCore (from `../node_modules/expo-modules-core/ExpoModulesCore.podspec`)
   - ExpoModulesJSI (from `../node_modules/expo-modules-jsi/apple`)
   - ExpoModulesWorklets (from `../node_modules/expo-modules-core/ExpoModulesWorklets.podspec`)
@@ -2014,7 +2014,7 @@ EXTERNAL SOURCES:
   ExpoDocumentPicker:
     :path: "../node_modules/expo-document-picker/ios"
   ExpoDomWebView:
-    :path: "../node_modules/expo/node_modules/@expo/dom-webview/ios"
+    :path: "../node_modules/@expo/dom-webview/ios"
   ExpoFileSystem:
     :podspec: "../node_modules/expo-file-system/ios/ExpoFileSystem.podspec"
   ExpoFont:
@@ -2022,7 +2022,7 @@ EXTERNAL SOURCES:
   ExpoKeepAwake:
     :path: "../node_modules/expo/node_modules/expo-keep-awake/ios"
   ExpoLogBox:
-    :path: "../node_modules/expo/node_modules/@expo/log-box"
+    :path: "../node_modules/@expo/log-box"
   ExpoModulesCore:
     :podspec: "../node_modules/expo-modules-core/ExpoModulesCore.podspec"
   ExpoModulesJSI:
@@ -2191,7 +2191,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   EXConstants: 8a0eb5e2553569c0e6710b73a8d90d1ce358c153
-  Expo: 83ceec8498d39a83bfcdf6ad56118bc6c5c81c72
+  Expo: caadf07d26cefa96b9840e7295c29493ea399cf3
   ExpoAsset: 2581425f9b581b4fce3c83ffc9f28528d1c4ee68
   ExpoCrypto: 20c5dfad9f2c0b7831591fb75397d0c248cf7f8b
   ExpoDocumentPicker: 3cb0c283969538c03ced2b405e519c91abf39f8e
@@ -2200,11 +2200,11 @@ SPEC CHECKSUMS:
   ExpoFont: f8198a952ba2ff53c9b393b5269ea435f232cfc3
   ExpoKeepAwake: 72af0b3be3615e59bc819d26061ff4e06b155ee0
   ExpoLogBox: 80957303325cd4439137765c90a87d7f22aaf2ff
-  ExpoModulesCore: 33e6a32ced24ff24ac7608ce12b785011c52b3c1
-  ExpoModulesJSI: b767422763350d2b248fb218f71bbb286fd2ee77
-  ExpoModulesWorklets: 22d1898cfa60b815ffc7421c775e2e6a1bd8dc82
+  ExpoModulesCore: ce6c0e5e0e00ce8346fc4a230c8a5274f54fff1e
+  ExpoModulesJSI: ded9f4c72f35fc9400ad85506a94acdd87b2b23b
+  ExpoModulesWorklets: 44a66395ccb9c5683d06fcbfb6b1cc01df62d423
   ExpoSecureStore: ff1fd5e073957417ba8f9dec0bebcbd55a60e747
-  ExpoSharing: a717847b4fff66f008f884329f1af9fe74c7f4ce
+  ExpoSharing: 4f0529a876e307b0dc5463f80dd318e4c1457c77
   ExpoSQLite: 1aa77d01fba0d1377b969d24f9845972d8fb0500
   ExpoWebBrowser: a4d7c382116fbe33c1ec7f60293f02b7e97042e4
   FBLazyVector: 2138c6c2ab66c31bf5754dc18097fbc498a49c7f
