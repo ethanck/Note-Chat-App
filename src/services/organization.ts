@@ -78,25 +78,12 @@ export const estimateReadability = (value: string) => {
 
 export const estimateConcepts = (value: string) => Array.from(new Set(tokenize(value))).slice(0, 18);
 
-const folderSummary = (folder: Folder, notes: Note[], folders: Folder[], incomingTokens: Set<string>): OrganizationCandidate => {
-  const childFolders = folders.filter((candidate) => candidate.parentId === folder.id);
-  const childNotes = notes.filter((note) => note.folderId === folder.id);
-  const summary = [...childFolders.map((child) => child.name), ...childNotes.map((note) => `${note.title}: ${previewText(note.content, 140)}`)].join(' · ');
-  return {
-    id: folder.id,
-    kind: 'folder',
-    title: folder.name,
-    parentId: folder.parentId || null,
-    summary: previewText(summary || folder.name, 280),
-    concepts: estimateConcepts(`${folder.name} ${summary}`),
-    readability: estimateReadability(summary),
-    childCount: childFolders.length + childNotes.length,
-    locked: Boolean(folder.isLocked),
-    relevance: scoreText(`${folder.name} ${summary}`, incomingTokens),
-  };
+type OrganizationTreeNode = OrganizationCandidate & {
+  children: OrganizationTreeNode[];
+  directNotes: OrganizationCandidate[];
 };
 
-const noteSummary = (note: Note, incomingTokens: Set<string>): OrganizationCandidate => ({
+const noteSummary = (note: Note, incomingTokens: Set<string>, lockedFolderIds: Set<string>): OrganizationCandidate => ({
   id: note.id,
   kind: 'note',
   title: note.title,
@@ -105,29 +92,108 @@ const noteSummary = (note: Note, incomingTokens: Set<string>): OrganizationCandi
   concepts: estimateConcepts(`${note.title} ${note.content}`),
   readability: estimateReadability(note.content),
   childCount: 0,
-  locked: Boolean(note.isLocked),
+  locked: Boolean(note.isLocked || (note.folderId && lockedFolderIds.has(note.folderId))),
   relevance: scoreText(`${note.title} ${note.content}`, incomingTokens),
 });
 
-const ancestorsFor = (folderId: string | null, folders: Folder[]) => {
-  const result: string[] = [];
-  let current = folderId;
-  while (current) {
-    result.push(current);
-    current = folders.find((folder) => folder.id === current)?.parentId || null;
-  }
-  return result;
-};
+const compactCandidate = (candidate: OrganizationCandidate) => ({
+  id: candidate.id,
+  kind: candidate.kind,
+  title: candidate.title,
+  parentId: candidate.parentId,
+  summary: candidate.summary,
+  concepts: candidate.concepts,
+  readability: candidate.readability,
+  childCount: candidate.childCount,
+  locked: candidate.locked,
+  relevance: candidate.relevance,
+});
 
-/** Builds a summary-only view. Full note bodies are deliberately excluded here. */
+/**
+ * Builds a bounded hierarchical view. The organizer starts with root summaries,
+ * then receives only the most relevant branch and its immediate alternatives.
+ * Full note bodies are deliberately excluded until the model requests one.
+ */
 export const buildOrganizationContext = (data: AppData, chatText: string) => {
   const incomingTokens = new Set(tokenize(chatText));
-  const folderCandidates = data.folders.map((folder) => folderSummary(folder, data.notes, data.folders, incomingTokens));
-  const noteCandidates = data.notes.map((note) => noteSummary(note, incomingTokens));
-  const topFolders = folderCandidates.sort((a, b) => b.relevance - a.relevance).slice(0, 8);
-  const topNotes = noteCandidates.sort((a, b) => b.relevance - a.relevance).slice(0, 8);
-  const ancestorIds = new Set(topFolders.flatMap((folder) => ancestorsFor(folder.id, data.folders)));
-  const branches = folderCandidates.filter((folder) => ancestorIds.has(folder.id) || topFolders.some((candidate) => candidate.id === folder.id));
+  const foldersById = new Map(data.folders.map((folder) => [folder.id, folder]));
+  const foldersByParent = new Map<string | null, Folder[]>();
+  data.folders.forEach((folder) => {
+    const parentId = folder.parentId || null;
+    const siblings = foldersByParent.get(parentId) || [];
+    siblings.push(folder);
+    foldersByParent.set(parentId, siblings);
+  });
+
+  const lockedFolderIds = new Set<string>();
+  data.folders.forEach((folder) => {
+    let current: Folder | undefined = folder;
+    while (current) {
+      if (current.isLocked) {
+        lockedFolderIds.add(folder.id);
+        break;
+      }
+      current = current.parentId ? foldersById.get(current.parentId) : undefined;
+    }
+  });
+
+  const notesByFolder = new Map<string | null, OrganizationCandidate[]>();
+  data.notes.forEach((note) => {
+    const folderId = note.folderId || null;
+    const notes = notesByFolder.get(folderId) || [];
+    notes.push(noteSummary(note, incomingTokens, lockedFolderIds));
+    notesByFolder.set(folderId, notes);
+  });
+
+  const buildNode = (folder: Folder): OrganizationTreeNode => {
+    const children = (foldersByParent.get(folder.id) || []).map(buildNode);
+    const directNotes = notesByFolder.get(folder.id) || [];
+    const directSummary = [
+      ...children.map((child) => `${child.title}: ${child.summary}`),
+      ...directNotes.map((note) => `${note.title}: ${note.summary}`),
+    ].join(' · ');
+    const descendantRelevance = children.reduce((best, child) => Math.max(best, child.relevance), 0);
+    const relevance = scoreText(`${folder.name} ${directSummary}`, incomingTokens) + Math.round(descendantRelevance * 0.35);
+    return {
+      id: folder.id,
+      kind: 'folder',
+      title: folder.name,
+      parentId: folder.parentId || null,
+      summary: previewText(directSummary || folder.name, 280),
+      concepts: estimateConcepts(`${folder.name} ${directSummary}`),
+      readability: estimateReadability(directSummary),
+      childCount: children.length + directNotes.length,
+      locked: lockedFolderIds.has(folder.id),
+      relevance,
+      children: children.sort((a, b) => b.relevance - a.relevance),
+      directNotes: directNotes.sort((a, b) => b.relevance - a.relevance),
+    };
+  };
+
+  const roots = (foldersByParent.get(null) || []).map(buildNode).sort((a, b) => b.relevance - a.relevance);
+  const bestPathFrom = (node: OrganizationTreeNode): OrganizationTreeNode[] => {
+    const next = node.children.find((child) => child.relevance > 0);
+    return next ? [node, ...bestPathFrom(next)] : [node];
+  };
+  const selectedPath = roots[0] ? bestPathFrom(roots[0]).slice(0, 6) : [];
+  const noteCandidates = Array.from(new Map(
+    selectedPath.flatMap((node) => node.directNotes).map((candidate) => [candidate.id, candidate]),
+  ).values()).sort((a, b) => b.relevance - a.relevance);
+  const topNotes = [...noteCandidates, ...(notesByFolder.get(null) || [])]
+    .filter((candidate, index, all) => all.findIndex((other) => other.id === candidate.id) === index)
+    .sort((a, b) => b.relevance - a.relevance)
+    .slice(0, 10);
+  const pathFolderIds = selectedPath.map((folder) => folder.id);
+  const rootCandidates = roots.slice(0, 6).map(compactCandidate);
+  const branch = selectedPath.map((node) => ({
+    folder: compactCandidate(node),
+    siblingFolders: node.children.slice(0, 5).map(compactCandidate),
+    notes: node.directNotes.slice(0, 8).map(compactCandidate),
+  }));
+  const candidateFolders = roots.slice(0, 6).map(compactCandidate);
+  const branchCandidates = selectedPath.map(compactCandidate);
+  const candidates = [...branchCandidates, ...candidateFolders, ...topNotes.map(compactCandidate)]
+    .filter((candidate, index, all) => all.findIndex((other) => other.id === candidate.id) === index);
   return {
     incoming: {
       title: 'Incoming conversation',
@@ -135,9 +201,14 @@ export const buildOrganizationContext = (data: AppData, chatText: string) => {
       concepts: estimateConcepts(chatText),
       readability: estimateReadability(chatText),
     },
-    candidates: [...branches, ...topNotes],
+    traversal: {
+      instruction: 'Start at rootFolders, follow the selectedPath when relevant, and choose only IDs present in this traversal.',
+      rootFolders: rootCandidates,
+      selectedPath: branch,
+    },
+    candidates,
     candidateNoteIds: topNotes.map((note) => note.id),
-    candidateFolderIds: topFolders.map((folder) => folder.id),
+    candidateFolderIds: Array.from(new Set([...pathFolderIds, ...roots.slice(0, 6).map((folder) => folder.id)])),
   };
 };
 
@@ -205,7 +276,7 @@ const planSchemaInput = (request: OrganizationRequest, context: ReturnType<typeo
   selectedNoteFullText: fullText || null,
 });
 
-const organizationInstructions = `You are the organization planner for a local-first notes app. Return only the requested JSON plan. You decide where new learning belongs; you do not discuss the plan in prose outside the JSON. Prefer high-confidence actions. Never target locked notes or folders. A locked note may only be appended to when the user explicitly requests that exact note; this request does not grant that permission. Use append when the incoming material clearly belongs in one existing note. Use create when it is a distinct topic. Use split when an existing note has become too broad or difficult to read; the original note should become a folder only when that improves the hierarchy, otherwise split in place. Use link only for meaningful conceptual relationships. Use ask_user when confidence is below roughly 0.85 or when the tree has conflicting plausible destinations. Summaries are the default evidence; set needsFullText true only when the exact current note body is needed to decide or rewrite. If full text is supplied, rewrittenContent or splitNotes may rewrite the affected note(s), but preserve correct existing information and do not invent facts.`;
+const organizationInstructions = `You are the organization planner for a local-first notes app. Return only the requested JSON plan. You decide where new learning belongs; you do not discuss the plan in prose outside the JSON. Traverse the supplied hierarchy from rootFolders into selectedPath and siblingFolders instead of assuming every note was searched. Only target IDs present in the supplied traversal. Prefer high-confidence actions. Never target locked notes or folders. A locked note may only be appended to when the user explicitly requests that exact note; this request does not grant that permission. Use append when the incoming material clearly belongs in one existing note. Use create when it is a distinct topic. Use split when an existing note has become too broad or difficult to read; the original note should become a folder only when that improves the hierarchy, otherwise split in place. Use link only for meaningful conceptual relationships. Use ask_user when the hierarchy has conflicting plausible destinations or the evidence is insufficient. Summaries and concepts are the default evidence; set needsFullText true only when the exact current note body is needed to decide or rewrite. If full text is supplied, rewrittenContent or splitNotes may rewrite the affected note(s), but preserve correct existing information and do not invent facts.`;
 
 export const requestOrganizationPlan = async (request: OrganizationRequest): Promise<OrganizationPlan> => {
   const context = buildOrganizationContext(request.data, request.chatText);

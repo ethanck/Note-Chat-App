@@ -10,15 +10,14 @@ import {
   ChatGPTAccount,
   Folder,
   Note,
-  NoteChange,
   Notebook,
   OrganizationPlan,
   OrganizationProposal,
   Quiz,
   Reference,
 } from '../types';
-import { makeId, previewText, tokenize, topicFromText } from '../utils/text';
-import { completeChatGPTRequest, loadChatGPTAccount } from '../services/chatgptAuth';
+import { makeId, previewText } from '../utils/text';
+import { completeChatGPTRequest, completeStructuredChatGPTRequest, loadChatGPTAccount } from '../services/chatgptAuth';
 import { removeStoredAttachment } from '../services/attachments';
 import { mergeReferenceIds, requestOrganizationPlan } from '../services/organization';
 
@@ -49,8 +48,9 @@ type AppStore = {
   toggleFolderLocked: (id: string) => void;
   createNotebook: (name: string) => string;
   updateNotebook: (id: string, patch: Partial<Notebook>) => void;
-  addNotebookToNotes: (id: string) => void;
-  createQuiz: (title?: string) => void;
+  addNotebookToNotes: (id: string) => Promise<void>;
+  createQuiz: (title?: string) => Promise<void>;
+  saveQuizScore: (id: string, score: number) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
   connectChatGPT: (account: ChatGPTAccount) => void;
   disconnectChatGPT: () => void;
@@ -69,29 +69,6 @@ type OrganizationUndo = {
 const AppStoreContext = createContext<AppStore | null>(null);
 
 const disconnectedReply = 'Connect with ChatGPT in Settings to receive an AI response. Your chats and notes remain local until you choose to connect.';
-
-const bestFolderForText = (folders: Folder[], text: string) => {
-  const tokens = new Set(tokenize(text));
-  return folders
-    .map((folder) => ({
-      folder,
-      score: tokenize(folder.name).reduce((score, token) => score + (tokens.has(token) ? 1 : 0), 0),
-    }))
-    .sort((a, b) => b.score - a.score)[0];
-};
-
-const bestNoteForText = (notes: Note[], text: string) => {
-  const tokens = new Set(tokenize(text));
-  return notes
-    .map((note) => ({
-      note,
-      score: tokenize(`${note.title} ${note.content}`).reduce(
-        (score, token) => score + (tokens.has(token) ? 1 : 0),
-        0,
-      ),
-    }))
-    .sort((a, b) => b.score - a.score)[0];
-};
 
 const withMigrations = (stored: AppData): AppData => ({
   ...stored,
@@ -132,19 +109,29 @@ const folderIsLocked = (folders: Folder[], folderId?: string) => {
 };
 
 const chatText = (chat: Chat) => chat.messages
-  .map((message) => `${message.role === 'user' ? 'Question' : 'Answer'}: ${message.content}`)
+  .map((message) => {
+    const attachments = (message.attachments || [])
+      .map((attachment) => attachment.extractedText?.trim() ? `Attached text from “${attachment.name}”:\n${attachment.extractedText}` : `Attached file: ${attachment.name}`)
+      .join('\n\n');
+    return [`${message.role === 'user' ? 'Question' : 'Answer'}: ${message.content}`, attachments].filter(Boolean).join('\n\n');
+  })
   .join('\n\n');
 
-const applyOrganizationPlan = (current: AppData, chatId: string, plan: OrganizationPlan): { data: AppData; noteIds: string[]; folderId?: string; label: string } => {
-  const chat = current.chats.find((item) => item.id === chatId);
-  if (!chat) return { data: current, noteIds: [], label: 'Chat could not be found' };
+const applyOrganizationPlan = (current: AppData, sourceId: string, plan: OrganizationPlan, sourceType: 'chat' | 'notebook' = 'chat'): { data: AppData; noteIds: string[]; folderId?: string; label: string } => {
+  const chat = sourceType === 'chat' ? current.chats.find((item) => item.id === sourceId) : undefined;
+  const notebook = sourceType === 'notebook' ? current.notebooks.find((item) => item.id === sourceId) : undefined;
+  if (!chat && !notebook) return { data: current, noteIds: [], label: sourceType === 'notebook' ? 'Notebook could not be found' : 'Chat could not be found' };
+  const sourceTitle = chat?.title || notebook?.name || 'Notes from source';
+  const sourceText = chat ? chatText(chat) : notebook?.content || '';
   const now = new Date().toISOString();
   const notes = [...current.notes];
   const folders = [...current.folders];
   const addedNoteIds: string[] = [];
   let targetFolderId: string | undefined;
-  let label = 'Saved conversation to Notes';
-  const incomingReferenceIds = current.references.filter((reference) => reference.chatIds.includes(chatId)).map((reference) => reference.id);
+  let label = sourceType === 'notebook' ? 'Saved notebook to Notes' : 'Saved conversation to Notes';
+  const incomingReferenceIds = sourceType === 'chat'
+    ? current.references.filter((reference) => reference.chatIds.includes(sourceId)).map((reference) => reference.id)
+    : [];
 
   const addFolder = (name: string, parentId?: string) => {
     const id = makeId('folder');
@@ -157,7 +144,7 @@ const applyOrganizationPlan = (current: AppData, chatId: string, plan: Organizat
     notes.push({
       id,
       title: title.trim() || 'Notes from conversation',
-      content: content.trim() || chatText(chat),
+      content: content.trim() || sourceText,
       folderId,
       createdAt: now,
       updatedAt: now,
@@ -177,14 +164,14 @@ const applyOrganizationPlan = (current: AppData, chatId: string, plan: Organizat
   if (plan.action === 'append' && plan.targetNoteId) {
     const target = notes.find((note) => note.id === plan.targetNoteId);
     if (target && !target.isLocked && !folderIsLocked(folders, target.folderId)) {
-      const rewritten = plan.rewrittenContent?.trim() || `${target.content.trim()}\n\n${chatText(chat)}`;
+      const rewritten = plan.rewrittenContent?.trim() || `${target.content.trim()}\n\n${sourceText}`;
       notes.splice(notes.indexOf(target), 1, {
         ...target,
         content: rewritten,
         updatedAt: now,
         referenceIds: mergeReferenceIds(target.referenceIds, incomingReferenceIds),
         latestChange: {
-          added: rewritten === target.content ? chatText(chat) : rewritten,
+          added: rewritten === target.content ? sourceText : rewritten,
           removed: plan.removedContent || (rewritten !== target.content ? target.content : undefined),
           createdAt: now,
         },
@@ -194,8 +181,8 @@ const applyOrganizationPlan = (current: AppData, chatId: string, plan: Organizat
       label = `Updated “${target.title}”`;
     }
   } else if (plan.action === 'create') {
-    if (!targetFolderId && plan.newFolderName) targetFolderId = addFolder(plan.newFolderName);
-    addNote(plan.newNoteTitle || chat.title, plan.rewrittenContent || chatText(chat), targetFolderId);
+    if (plan.newFolderName) targetFolderId = addFolder(plan.newFolderName, targetFolderId);
+    addNote(plan.newNoteTitle || sourceTitle, plan.rewrittenContent || sourceText, targetFolderId);
     label = targetFolderId ? 'Created a new organized note' : 'Created a new note in Inbox';
   } else if (plan.action === 'split' && plan.targetNoteId && plan.splitNotes.length >= 2) {
     const source = notes.find((note) => note.id === plan.targetNoteId);
@@ -228,8 +215,10 @@ const applyOrganizationPlan = (current: AppData, chatId: string, plan: Organizat
     ...current,
     folders,
     notes,
-    chats: current.chats.map((item) => item.id === chatId ? { ...item, isSaved: true, updatedAt: savedReferenceAt } : item),
-    references: current.references.map((reference) => reference.chatIds.includes(chatId)
+    chats: sourceType === 'chat'
+      ? current.chats.map((item) => item.id === sourceId ? { ...item, isSaved: true, updatedAt: savedReferenceAt } : item)
+      : current.chats,
+    references: current.references.map((reference) => reference.chatIds.includes(sourceId)
       ? { ...reference, folderId: targetFolderId, isInInbox: false, savedToNotesAt: savedReferenceAt, noteIds: mergeReferenceIds(reference.noteIds, addedNoteIds) }
       : reference),
   };
@@ -441,98 +430,38 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       folders: current.folders.map((folder) => folder.id === id ? { ...folder, isLocked: !folder.isLocked } : folder),
     }));
 
-  const organizeTextToNotes = (text: string, title: string) => {
-    const topic = topicFromText(text);
-    const folderMatch = bestFolderForText(data.folders, text);
-    let targetFolderId = folderMatch?.score ? folderMatch.folder.id : undefined;
-    let action = '';
-
-    if (!targetFolderId) {
-      targetFolderId = createFolder('Chat Notes');
-      action = 'Created Chat Notes folder';
-    } else if (folderMatch && folderMatch.score < 2) {
-      const existingSubfolder = data.folders.find(
-        (folder) => folder.parentId === folderMatch.folder.id && tokenize(folder.name).some((token) => tokenize(topic).includes(token)),
-      );
-      targetFolderId = existingSubfolder?.id || createFolder(topic, folderMatch.folder.id);
-      action = existingSubfolder ? `Added to ${existingSubfolder.name}` : `Created ${topic} subfolder`;
-    }
-
-    const noteMatch = bestNoteForText(data.notes, text);
-    if (noteMatch && noteMatch.score >= 2) {
-      const added = `## ${title}\n\n${text}`;
-      const change: NoteChange = { added, createdAt: new Date().toISOString() };
-      updateNote(noteMatch.note.id, {
-        content: `${noteMatch.note.content}\n\n${added}`,
-        folderId: targetFolderId,
-        latestChange: change,
-      });
-      setLastAction(`${action || 'Updated an existing note'} · changes applied automatically`);
-      return { noteId: noteMatch.note.id, folderId: targetFolderId };
-    }
-
-    const noteId = createNote({ title: `Notes from ${title}`, content: text, folderId: targetFolderId });
-    setLastAction(`${action || 'Created a new note'} · changes applied automatically`);
-    return { noteId, folderId: targetFolderId };
-  };
-
-  const applyPlanForChat = (chatId: string, plan: OrganizationPlan) => {
-    const before = data;
-    const result = applyOrganizationPlan(before, chatId, plan);
-    if (result.data === data) {
-      setLastAction(result.label);
-      return false;
-    }
-    update(() => result.data);
-    setOrganizationUndo({
-      id: makeId('organization-undo'),
-      label: result.label,
-      before: {
-        folders: before.folders,
-        notes: before.notes,
-        chats: before.chats,
-        references: before.references,
-        organizationProposals: before.organizationProposals,
-      },
-      after: {
-        folders: result.data.folders,
-        notes: result.data.notes,
-        chats: result.data.chats,
-        references: result.data.references,
-        organizationProposals: result.data.organizationProposals,
-      },
-    });
-    setLastAction(`${result.label} · confidence ${Math.round(plan.confidence * 100)}%`);
-    return true;
-  };
-
   const organizeChatToNotes = async (chatId: string): Promise<'saved' | 'review' | 'failed'> => {
     const chat = data.chats.find((item) => item.id === chatId);
     if (!chat || !chat.messages.length) return 'failed';
-    const plan = await requestOrganizationPlan({ chatTitle: chat.title, chatText: chatText(chat), data });
-    const shouldReview = data.settings.organizationMode === 'review' || plan.action === 'ask_user' || plan.confidence < data.settings.organizationConfidenceThreshold;
-    if (shouldReview) {
-      const proposal: OrganizationProposal = {
-        id: makeId('organization-proposal'),
-        chatId,
-        chatTitle: chat.title,
-        createdAt: new Date().toISOString(),
-        status: 'pending',
-        plan,
-        referenceIds: data.references.filter((reference) => reference.chatIds.includes(chatId)).map((reference) => reference.id),
-      };
-      update((current) => ({ ...current, organizationProposals: [...current.organizationProposals, proposal] }));
+    const existingProposal = data.organizationProposals.find((proposal) => proposal.chatId === chatId && proposal.status === 'pending');
+    if (existingProposal) {
       setLastAction(`Organization proposal ready for “${chat.title}” · review required`);
       return 'review';
     }
-    return applyPlanForChat(chatId, plan) ? 'saved' : 'failed';
+    const plan = await requestOrganizationPlan({ chatTitle: chat.title, chatText: chatText(chat), data });
+    const proposal: OrganizationProposal = {
+      id: makeId('organization-proposal'),
+      chatId,
+      sourceId: chatId,
+      sourceType: 'chat',
+      chatTitle: chat.title,
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      plan,
+      referenceIds: data.references.filter((reference) => reference.chatIds.includes(chatId)).map((reference) => reference.id),
+    };
+    update((current) => ({ ...current, organizationProposals: [...current.organizationProposals, proposal] }));
+    setLastAction(`Organization proposal ready for “${chat.title}” · review required`);
+    return 'review';
   };
 
   const applyOrganizationProposal = (id: string) => {
     const proposal = data.organizationProposals.find((item) => item.id === id && item.status === 'pending');
     if (!proposal) return;
     const before = data;
-    const result = applyOrganizationPlan(before, proposal.chatId, proposal.plan);
+    const sourceType = proposal.sourceType || 'chat';
+    const sourceId = proposal.sourceId || proposal.chatId;
+    const result = applyOrganizationPlan(before, sourceId, proposal.plan, sourceType);
     if (result.data === before) {
       setLastAction(result.label);
       return;
@@ -604,26 +533,112 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       ),
     }));
 
-  const addNotebookToNotes = (id: string) => {
+  const addNotebookToNotes = async (id: string) => {
     const notebook = data.notebooks.find((item) => item.id === id);
     if (!notebook || !notebook.content.trim()) return;
-    organizeTextToNotes(notebook.content, notebook.name);
+    const existingProposal = data.organizationProposals.find((proposal) => proposal.sourceType === 'notebook' && proposal.sourceId === id && proposal.status === 'pending');
+    if (existingProposal) {
+      setLastAction(`Organization proposal ready for “${notebook.name}” · review required`);
+      return;
+    }
+    if (!data.chatGPTAccount.connected) {
+      setLastAction('Connect with ChatGPT before organizing a notebook');
+      return;
+    }
+    try {
+      const plan = await requestOrganizationPlan({ chatTitle: notebook.name, chatText: notebook.content, data });
+      const proposal: OrganizationProposal = {
+        id: makeId('organization-proposal'),
+        chatId: '',
+        sourceId: id,
+        sourceType: 'notebook',
+        chatTitle: notebook.name,
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        plan,
+        referenceIds: [],
+      };
+      update((current) => ({ ...current, organizationProposals: [...current.organizationProposals, proposal] }));
+      setLastAction(`Organization proposal ready for “${notebook.name}” · review required`);
+    } catch (error) {
+      setLastAction(error instanceof Error ? error.message : 'Notebook organization failed. Please try again.');
+    }
   };
 
-  const createQuiz = (title = 'Study Checkpoint') => {
-    const note = data.notes[0];
-    const questionText = note ? `What is the main idea of “${note.title}”?` : 'What would you like to remember from this lesson?';
-    const quiz: Quiz = {
-      id: makeId('quiz'),
-      title,
-      questionCount: 1,
-      difficulty: 'Medium',
-      createdAt: new Date().toISOString(),
-      questions: [{ id: makeId('question'), prompt: questionText, options: ['A key idea', 'A random detail', 'An unrelated topic'], answer: 'A key idea' }],
+  const createQuiz = async (title = 'Study Checkpoint') => {
+    if (!data.notes.length) {
+      setLastAction('Add at least one note before generating a quiz');
+      return;
+    }
+    if (!data.chatGPTAccount.connected) {
+      setLastAction('Connect with ChatGPT before generating a quiz');
+      return;
+    }
+    const quizSchema: Record<string, unknown> = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string' },
+        difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
+        questions: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 8,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              prompt: { type: 'string' },
+              options: { type: 'array', minItems: 3, maxItems: 4, items: { type: 'string' } },
+              answer: { type: 'string' },
+            },
+            required: ['prompt', 'options', 'answer'],
+          },
+        },
+      },
+      required: ['title', 'difficulty', 'questions'],
     };
-    update((current) => ({ ...current, quizzes: [quiz, ...current.quizzes] }));
-    setLastAction('Quiz generated from your local notes');
+    const notesContext = data.notes
+      .slice()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 12)
+      .map((note) => `NOTE: ${note.title}\n${previewText(note.content, 1200)}`)
+      .join('\n\n');
+    try {
+      const generated = await completeStructuredChatGPTRequest<{
+        title: string;
+        difficulty: Quiz['difficulty'];
+        questions: Array<{ prompt: string; options: string[]; answer: string }>;
+      }>({
+        name: 'study_quiz',
+        schema: quizSchema,
+        instructions: 'You generate accurate study quizzes from local notes. Return only JSON. Write 3 to 8 questions that test understanding, not trivia. Every answer must exactly match one option. Do not invent facts outside the supplied notes.',
+        input: `Create a quiz titled “${title}” from these notes:\n\n${notesContext}`,
+      });
+      const questions = generated.questions
+        .filter((question) => question.prompt?.trim() && question.options?.length >= 3 && question.options.includes(question.answer))
+        .map((question) => ({ ...question, id: makeId('question'), options: question.options.slice(0, 4) }));
+      if (!questions.length) throw new Error('ChatGPT returned no usable quiz questions.');
+      const quiz: Quiz = {
+        id: makeId('quiz'),
+        title: generated.title?.trim() || title,
+        questionCount: questions.length,
+        difficulty: generated.difficulty || 'Medium',
+        createdAt: new Date().toISOString(),
+        questions,
+      };
+      update((current) => ({ ...current, quizzes: [quiz, ...current.quizzes] }));
+      setLastAction('Quiz generated from your local notes');
+    } catch (error) {
+      setLastAction(error instanceof Error ? error.message : 'Quiz generation failed. Please try again.');
+    }
   };
+
+  const saveQuizScore = (id: string, score: number) =>
+    update((current) => ({
+      ...current,
+      quizzes: current.quizzes.map((quiz) => quiz.id === id ? { ...quiz, lastScore: score } : quiz),
+    }));
 
   const deleteReference = (id: string) => {
     const reference = data.references.find((item) => item.id === id);
@@ -631,6 +646,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     update((current) => ({
       ...current,
       references: current.references.filter((item) => item.id !== id),
+      notes: current.notes.map((note) => ({ ...note, referenceIds: note.referenceIds?.filter((referenceId) => referenceId !== id) })),
+      organizationProposals: current.organizationProposals.map((proposal) => ({ ...proposal, referenceIds: proposal.referenceIds.filter((referenceId) => referenceId !== id) })),
       chats: current.chats.map((chat) => ({
         ...chat,
         messages: chat.messages.map((message) => ({
@@ -692,6 +709,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       updateNotebook,
       addNotebookToNotes,
       createQuiz,
+      saveQuizScore,
       updateSettings,
       connectChatGPT,
       disconnectChatGPT,

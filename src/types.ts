@@ -49,6 +49,9 @@ export type OrganizationPlan = {
 export type OrganizationProposal = {
   id: string;
   chatId: string;
+  /** Notebook proposals use sourceId/sourceType; chatId remains for migration compatibility. */
+  sourceId?: string;
+  sourceType?: 'chat' | 'notebook';
   chatTitle: string;
   createdAt: string;
   status: 'pending' | 'applied' | 'dismissed';

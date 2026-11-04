@@ -10,16 +10,16 @@ The original Swift app is kept in its own folder. This repository is a separate 
 - Slide-out chat drawer with search, favorites, pinning, and archive/delete actions.
 - Local notes with folders, nested folders, search, favorites, pinning, and a lightweight rich editor.
 - Multiple local notebooks with an Add to Notes workflow.
-- Local generated-quiz flow with scoring.
-- Summary-first structured chat-to-notes organization with high-confidence automatic actions, review proposals for uncertain actions, one-step undo, locked notes/folders, split-and-rewrite planning, and a visible reference panel.
-- Local attachment intake for TXT, Markdown, PDF, DOC/DOCX, and images. Files are copied into the app sandbox; TXT/Markdown text is extracted locally and included in AI context only when sent.
+- AI-generated quizzes from local notes with persisted scores.
+- Hierarchical summary-first chat-to-notes organization. ChatGPT selects a likely folder branch, proposes append/create/split/link/rewrite actions, and the user accepts or declines a visible change preview before anything is written.
+- Local attachment intake for TXT, Markdown, PDF, DOC/DOCX, and images. Files are copied into the app sandbox; supported files are sent as inline Responses API inputs only when the user sends them in a chat.
 - Local SQLite persistence on the device.
-- Sign in with ChatGPT OAuth using PKCE, ID-token/JWKS verification, SecureStore credentials, token refresh, model discovery, and streamed Responses API requests when the user grants eligible ChatGPT plan usage.
+- Sign in with ChatGPT OAuth using PKCE, ID-token/JWKS verification, SecureStore credentials, token refresh, model discovery, and Responses API requests when the user grants eligible ChatGPT plan usage.
 - Firebase is intentionally not used for notes, folders, or chat content in this first version.
 
 ## Development
 
-Use Node 20 for Expo and Xcode tooling. The version is pinned in `.nvmrc`; the machine's default Node version must not be used for CocoaPods or Expo autolinking.
+Use Node 20 for Expo and Xcode tooling. The version is pinned in `.nvmrc`; the machine's default Node version must not be used for CocoaPods or Expo autolinking. Keep one local checkout as the source of truth and open the `ios/NoteAppChat.xcworkspace` inside that same checkout.
 
 ```sh
 nvm use

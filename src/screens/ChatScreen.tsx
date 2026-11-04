@@ -59,7 +59,7 @@ export const ChatScreen = ({
     setOrganizing(true);
     try {
       const result = await organizeChatToNotes(chat.id);
-      if (result === 'review') Alert.alert('Organization needs review', 'The chat was not marked as saved yet. Open Notes to review the proposed folder and note changes.');
+      if (result === 'review') Alert.alert('Review your note changes', 'ChatGPT proposed where this conversation belongs. Open Notes to review and accept or decline the changes.');
       if (result === 'failed') Alert.alert('Could not organize chat', 'The proposed organization could not be applied safely. Your chat remains unchanged.');
     } finally {
       setOrganizing(false);
@@ -196,7 +196,7 @@ const MessageAttachment = ({ attachment, user }: { attachment: Attachment; user:
     <AppIcon name={attachmentIcon(attachment.kind)} size={14} color={user ? '#FFFFFF' : colors.primary} />
     <View style={{ flex: 1 }}>
       <Text numberOfLines={1} style={[styles.messageAttachmentName, user && styles.userMessageText]}>{attachment.name}</Text>
-      <Text style={[styles.messageAttachmentMeta, user && styles.userAttachmentMeta]}>{attachment.processingStatus === 'ready' ? 'Text ready for AI context' : attachment.processingStatus === 'failed' ? 'Stored locally · text extraction failed' : 'Stored locally'} · {formatAttachmentSize(attachment.size)}</Text>
+      <Text style={[styles.messageAttachmentMeta, user && styles.userAttachmentMeta]}>{attachment.processingStatus === 'ready' ? 'Ready for AI context' : attachment.processingStatus === 'failed' ? 'Stored locally · text extraction failed' : 'Stored locally'} · {formatAttachmentSize(attachment.size)}</Text>
     </View>
   </View>
 );

@@ -3,7 +3,7 @@ import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View 
 import { colors, radii, shadows } from '../theme/theme';
 import { useAppStore } from '../store/AppStore';
 import { AppIcon, IconButton, Pill, SearchField, SectionTitle, Surface } from '../components/Ui';
-import { Folder, Note, OrganizationProposal, Reference } from '../types';
+import { AppData, Folder, Note, OrganizationProposal, Reference } from '../types';
 import { attachmentIcon, formatAttachmentSize } from '../services/attachments';
 import { formatDate, previewText } from '../utils/text';
 
@@ -44,7 +44,7 @@ export const NotesScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
   }
 
   if (showInbox) return <ReferenceInbox references={inboxReferences} onBack={() => setShowInbox(false)} onDelete={deleteReference} />;
-  if (showOrganizationReview) return <OrganizationReview proposals={pendingProposals} onBack={() => setShowOrganizationReview(false)} onApply={applyOrganizationProposal} onDismiss={dismissOrganizationProposal} />;
+  if (showOrganizationReview) return <OrganizationReview data={data} proposals={pendingProposals} onBack={() => setShowOrganizationReview(false)} onApply={applyOrganizationProposal} onDismiss={dismissOrganizationProposal} />;
 
   return (
     <View style={styles.screen}>
@@ -93,13 +93,51 @@ const ReferenceCard = ({ reference, onDelete }: { reference: Reference; onDelete
   <Surface style={styles.referenceCard}><View style={styles.referenceIcon}><AppIcon name={attachmentIcon(reference.kind)} size={19} color={colors.primary} /></View><View style={styles.referenceMain}><Text numberOfLines={1} style={styles.referenceName}>{reference.name}</Text><Text style={styles.referenceMeta}>{reference.kind.toUpperCase()} · {formatAttachmentSize(reference.size)} · Local only</Text></View><Pressable onPress={onDelete} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${reference.name}`}><AppIcon name="trash-outline" size={18} color={colors.danger} /></Pressable></Surface>
 );
 
-const OrganizationReview = ({ proposals, onBack, onApply, onDismiss }: { proposals: OrganizationProposal[]; onBack: () => void; onApply: (id: string) => void; onDismiss: (id: string) => void }) => (
+const ProposalPreview = ({ proposal, data }: { proposal: OrganizationProposal; data: AppData }) => {
+  const { plan } = proposal;
+  const targetNote = plan.targetNoteId ? data.notes.find((note) => note.id === plan.targetNoteId) : undefined;
+  const targetFolder = plan.targetFolderId ? data.folders.find((folder) => folder.id === plan.targetFolderId) : undefined;
+  const linkedNotes = [plan.targetNoteId, ...plan.linkNoteIds]
+    .filter(Boolean)
+    .map((id) => data.notes.find((note) => note.id === id))
+    .filter((note): note is Note => Boolean(note));
+
+  return (
+    <View style={styles.changePreview}>
+      {targetFolder && <Text style={styles.previewLabel}>DESTINATION</Text>}
+      {targetFolder && <Text style={styles.previewDestination}>{targetFolder.name}</Text>}
+      {plan.action === 'append' && <>
+        <Text style={styles.previewLabel}>NOTE TO UPDATE</Text>
+        <Text style={styles.previewDestination}>{targetNote?.title || 'Existing note'}</Text>
+        {plan.removedContent && <Text style={styles.previewRemoved}>{previewText(plan.removedContent, 900)}</Text>}
+        <Text style={styles.previewLabel}>PROPOSED CONTENT</Text>
+        <Text style={styles.previewAdded}>{previewText(plan.rewrittenContent || 'Append the saved conversation to this note.', 1200)}</Text>
+      </>}
+      {plan.action === 'create' && <>
+        {plan.newFolderName && <><Text style={styles.previewLabel}>NEW FOLDER</Text><Text style={styles.previewAdded}>{plan.newFolderName}</Text></>}
+        <Text style={styles.previewLabel}>NEW NOTE · {plan.newNoteTitle || proposal.chatTitle}</Text>
+        <Text style={styles.previewAdded}>{previewText(plan.rewrittenContent || 'The saved conversation will become a new note.', 1200)}</Text>
+      </>}
+      {plan.action === 'split' && <>
+        {targetNote && <><Text style={styles.previewLabel}>REPLACES</Text><Text style={styles.previewRemoved}>{targetNote.title}</Text></>}
+        {plan.splitNotes.map((note) => <View key={note.title} style={{ marginTop: 8 }}><Text style={styles.previewLabel}>NEW NOTE · {note.title}</Text><Text style={styles.previewAdded}>{previewText(note.content, 900)}</Text></View>)}
+      </>}
+      {plan.action === 'link' && <>
+        <Text style={styles.previewLabel}>LINKED NOTES</Text>
+        <Text style={styles.previewAdded}>{linkedNotes.map((note) => note.title).join(' · ') || 'Related notes will be linked.'}</Text>
+      </>}
+      {plan.action === 'ask_user' && <Text style={styles.previewAdded}>ChatGPT needs your decision before changing the note structure.</Text>}
+    </View>
+  );
+};
+
+const OrganizationReview = ({ data, proposals, onBack, onApply, onDismiss }: { data: AppData; proposals: OrganizationProposal[]; onBack: () => void; onApply: (id: string) => void; onDismiss: (id: string) => void }) => (
   <View style={styles.screen}>
     <View style={styles.header}><IconButton icon="arrow-back" onPress={onBack} color={colors.text} accessibilityLabel="Back to notes" /><View style={{ flex: 1 }}><Text style={styles.kicker}>AI ORGANIZATION</Text><Text style={styles.title}>Review changes</Text></View></View>
     <ScrollView contentContainerStyle={styles.content}>
-      <Surface style={styles.inboxIntro}><AppIcon name="shield-checkmark-outline" size={18} color={colors.primary} /><Text style={styles.inboxIntroText}>High-confidence plans apply automatically. These plans fell below the confidence threshold or were explicitly set to review mode.</Text></Surface>
+      <Surface style={styles.inboxIntro}><AppIcon name="shield-checkmark-outline" size={18} color={colors.primary} /><Text style={styles.inboxIntroText}>ChatGPT has chosen the likely destination and prepared the changes. Nothing is written to your notes until you accept a proposal.</Text></Surface>
       {proposals.length === 0 && <View style={styles.empty}><AppIcon name="checkmark-circle-outline" size={28} color={colors.success} /><Text style={styles.emptyTitle}>Nothing needs review</Text><Text style={styles.emptyBody}>New organization proposals will appear here.</Text></View>}
-      {proposals.map((proposal) => <Surface key={proposal.id} style={styles.proposalCard}><View style={styles.proposalHeader}><View style={styles.proposalIcon}><AppIcon name="sparkles" size={17} color={colors.peach} /></View><View style={{ flex: 1 }}><Text style={styles.proposalTitle} numberOfLines={1}>{proposal.chatTitle}</Text><Text style={styles.proposalMeta}>{proposal.plan.action.toUpperCase()} · {Math.round(proposal.plan.confidence * 100)}% confidence</Text></View></View><Text style={styles.proposalBody}>{proposal.plan.rationale}</Text><View style={styles.proposalActions}><Pressable onPress={() => onDismiss(proposal.id)} style={styles.proposalDismiss}><Text style={styles.proposalDismissText}>Keep in Inbox</Text></Pressable><Pressable onPress={() => onApply(proposal.id)} style={styles.proposalApply}><Text style={styles.proposalApplyText}>Apply plan</Text></Pressable></View></Surface>)}
+      {proposals.map((proposal) => <Surface key={proposal.id} style={styles.proposalCard}><View style={styles.proposalHeader}><View style={styles.proposalIcon}><AppIcon name="sparkles" size={17} color={colors.peach} /></View><View style={{ flex: 1 }}><Text style={styles.proposalTitle} numberOfLines={1}>{proposal.chatTitle}</Text><Text style={styles.proposalMeta}>{proposal.plan.action.toUpperCase()} · {Math.round(proposal.plan.confidence * 100)}% confidence</Text></View></View><Text style={styles.proposalBody}>{proposal.plan.rationale}</Text><ProposalPreview proposal={proposal} data={data} /><View style={styles.proposalActions}><Pressable onPress={() => onDismiss(proposal.id)} style={styles.proposalDismiss}><Text style={styles.proposalDismissText}>Keep in Inbox</Text></Pressable><Pressable onPress={() => onApply(proposal.id)} style={styles.proposalApply}><Text style={styles.proposalApplyText}>Accept changes</Text></Pressable></View></Surface>)}
     </ScrollView>
   </View>
 );
@@ -206,6 +244,11 @@ const styles = StyleSheet.create({
   proposalTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
   proposalMeta: { color: colors.textFaint, fontSize: 10, marginTop: 3, fontWeight: '800' },
   proposalBody: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 12 },
+  changePreview: { marginTop: 12, padding: 11, borderRadius: 11, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  previewLabel: { color: colors.textFaint, fontSize: 9, fontWeight: '900', letterSpacing: 1, marginTop: 6, marginBottom: 4 },
+  previewDestination: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  previewAdded: { color: colors.success, backgroundColor: colors.successSoft, padding: 9, borderRadius: 8, fontSize: 12, lineHeight: 18 },
+  previewRemoved: { color: colors.danger, backgroundColor: colors.dangerSoft, textDecorationLine: 'line-through', padding: 9, borderRadius: 8, fontSize: 12, lineHeight: 18 },
   proposalActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 10, marginTop: 14 },
   proposalDismiss: { paddingHorizontal: 10, paddingVertical: 9 },
   proposalDismissText: { color: colors.textMuted, fontSize: 12, fontWeight: '800' },

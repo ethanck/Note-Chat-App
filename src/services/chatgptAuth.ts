@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
@@ -18,8 +19,8 @@ const ISSUER = 'https://auth.openai.com';
 const RESOURCE = 'https://api.openai.com/v1';
 const INITIAL_CLIENT_ID = 'dynamic_agent_client';
 const AGENT_NAME = 'Note App Chat';
-// Sign in with ChatGPT's open-source flow uses a loopback callback. On iOS,
-// ASWebAuthenticationSession intercepts the callback and returns it to the app.
+// Sign in with ChatGPT's open-source flow uses the exact loopback callback URI
+// registered for this client. Keep this value stable for native registration.
 const NATIVE_REDIRECT_URI = 'http://127.0.0.1:1455/auth/callback';
 const SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
 
@@ -192,6 +193,9 @@ export const signInWithChatGPT = async (): Promise<ChatGPTConnection> => {
   if (callback.error) throw new Error(callback.error_description || callback.error);
   if (!callback.code) throw new Error('ChatGPT did not return an authorization code.');
   const issuedClientId = callback.client_id || clientId;
+  if (previous?.clientId && issuedClientId !== previous.clientId) {
+    throw new Error('ChatGPT returned a different client registration. Please sign in again.');
+  }
   if (issuedClientId === INITIAL_CLIENT_ID) throw new Error('ChatGPT did not finish registering Note App Chat.');
 
   const tokenResponse = await fetch(TOKEN_ENDPOINT, {
@@ -219,7 +223,9 @@ export const signInWithChatGPT = async (): Promise<ChatGPTConnection> => {
   const claims = verified.payload;
   if (!claims.sub) throw new Error('ChatGPT did not provide a stable account identity.');
   if (claims.nonce !== nonce) throw new Error('ChatGPT sign-in could not be verified. Please try again.');
-  const scopes = (tokenBody.scope || callback.scope || '').split(' ').filter(Boolean);
+  // Only scopes granted by the token endpoint authorize plan usage. A scope
+  // echoed by the browser callback is not sufficient proof of consent.
+  const scopes = (tokenBody.scope || '').split(' ').filter(Boolean);
   const credentials: ChatGPTCredentials = {
     clientId: issuedClientId,
     hostId,
@@ -256,14 +262,18 @@ const responseTextFromStream = (raw: string) => {
     const payload = line.slice(5).trim();
     if (!payload || payload === '[DONE]') continue;
     try {
-      const event = JSON.parse(payload) as { type?: string; delta?: string; text?: string; response?: { output_text?: string }; error?: { message?: string } };
+      const event = JSON.parse(payload) as { type?: string; delta?: string; text?: string; response?: { output_text?: string; error?: { code?: string; message?: string } }; error?: { code?: string; message?: string } };
       if (event.type === 'response.output_text.delta') text += event.delta || '';
       if (event.type === 'response.output_text.done' && !text) text = event.text || '';
       if (event.type === 'response.completed') {
         completed = true;
         if (!text) text = event.response?.output_text || '';
       }
-      if (event.type === 'response.failed') throw new Error(`ChatGPT: ${event.error?.message || 'the response failed.'}`);
+      if (event.type === 'response.failed') {
+        const failure = event.response?.error || event.error;
+        throw new Error(`ChatGPT: ${failure?.message || failure?.code || 'the response failed.'}`);
+      }
+      if (event.type === 'response.incomplete') throw new Error('ChatGPT returned an incomplete response.');
     } catch (error) {
       if (error instanceof Error && error.message.includes('ChatGPT')) throw error;
     }
@@ -281,15 +291,71 @@ const responseTextFromStream = (raw: string) => {
   return text.trim();
 };
 
-const promptContentForMessage = (message: ChatMessage) => {
-  const extractedAttachments = (message.attachments || [])
-    .filter((attachment) => attachment.extractedText?.trim())
-    .map((attachment) => `Attached text from "${attachment.name}":\n${attachment.extractedText}`)
-    .join('\n\n');
-  return [message.content, extractedAttachments].filter(Boolean).join('\n\n');
+type ResponsesContent =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string; detail: 'auto' }
+  | { type: 'input_file'; filename: string; file_data: string; detail: 'auto' };
+
+type ResponsesInput = Array<{ role: 'user' | 'assistant'; content: string | ResponsesContent[] }> | string;
+
+const MAX_INLINE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 };
 
-type ResponsesInput = Array<{ role: 'user' | 'assistant' | 'system'; content: string }> | string;
+const attachmentDataUrl = async (attachment: NonNullable<ChatMessage['attachments']>[number]) => {
+  if (attachment.size && attachment.size > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error(`“${attachment.name}” is too large to send. Please choose a file under 20 MB.`);
+  }
+
+  let base64: string;
+  if (Platform.OS === 'web') {
+    const response = await fetch(attachment.localUri);
+    if (!response.ok) throw new Error(`Could not read “${attachment.name}” from this device.`);
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  } else {
+    base64 = await FileSystem.readAsStringAsync(attachment.localUri, { encoding: FileSystem.EncodingType.Base64 });
+  }
+
+  const estimatedBytes = Math.floor((base64.length * 3) / 4);
+  if (estimatedBytes > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error(`“${attachment.name}” is too large to send. Please choose a file under 20 MB.`);
+  }
+  return `data:${attachment.mimeType || 'application/octet-stream'};base64,${base64}`;
+};
+
+const promptContentForMessage = async (message: ChatMessage, seenAttachmentIds: Set<string>): Promise<ResponsesContent[]> => {
+  const content: ResponsesContent[] = [];
+  if (message.content.trim()) content.push({ type: 'input_text', text: message.content });
+
+  for (const attachment of message.attachments || []) {
+    // A conversation can mention the same local file in more than one turn.
+    // Include the binary once per request while keeping the message text in
+    // the surrounding history, so requests stay small and predictable.
+    if (seenAttachmentIds.has(attachment.id)) continue;
+    seenAttachmentIds.add(attachment.id);
+
+    if (attachment.kind === 'text' && attachment.extractedText?.trim()) {
+      content.push({ type: 'input_text', text: `Attached text from “${attachment.name}”:\n${attachment.extractedText}` });
+      continue;
+    }
+
+    const dataUrl = await attachmentDataUrl(attachment);
+    if (attachment.kind === 'image') {
+      content.push({ type: 'input_image', image_url: dataUrl, detail: 'auto' });
+    } else {
+      content.push({ type: 'input_file', filename: attachment.name, file_data: dataUrl, detail: 'auto' });
+    }
+  }
+
+  return content;
+};
 
 const requestChatGPT = async ({
   instructions,
@@ -326,8 +392,8 @@ const requestChatGPT = async ({
   if (!response.ok) {
     let message = 'ChatGPT could not answer that request.';
     try {
-      const body = JSON.parse(raw) as { error?: { message?: string } };
-      message = body.error?.message || message;
+      const body = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
+      message = body.error?.message || body.detail || message;
     } catch {
       // Keep the generic message when the server did not return JSON.
     }
@@ -344,9 +410,10 @@ export const completeChatGPTRequest = async ({
   settings: AppSettings;
 }) => {
   const instructions = `You are Note App Chat, a thoughtful study companion. Use an explanation complexity of ${settings.aiComplexity}/10 and a personality of ${settings.aiPersonality}/10. Format responses as ${settings.responseFormat}. Be clear and practical. Do not claim to have access to the user's local files unless they were included in the conversation.`;
+  const seenAttachmentIds = new Set<string>();
   return requestChatGPT({
     instructions,
-    input: messages.slice(-24).map((message) => ({ role: message.role, content: promptContentForMessage(message) })),
+    input: await Promise.all(messages.slice(-24).map(async (message) => ({ role: message.role, content: await promptContentForMessage(message, seenAttachmentIds) }))),
   });
 };
 

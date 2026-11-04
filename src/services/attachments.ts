@@ -65,7 +65,7 @@ const toAttachment = async (asset: DocumentPicker.DocumentPickerAsset): Promise<
     kind,
     size: asset.size,
     createdAt: new Date().toISOString(),
-    processingStatus: 'stored',
+    processingStatus: 'ready',
   };
 
   if (kind !== 'text') return base;

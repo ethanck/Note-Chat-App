@@ -8,8 +8,19 @@ import { formatDate } from '../utils/text';
 
 export const QuizScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
   const { data, createQuiz } = useAppStore();
+  const [generating, setGenerating] = useState(false);
   const [selectedQuizId, setSelectedQuizId] = useState<string>();
   const selectedQuiz = data.quizzes.find((quiz) => quiz.id === selectedQuizId);
+
+  const generateQuiz = async () => {
+    if (generating) return;
+    setGenerating(true);
+    try {
+      await createQuiz();
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   if (selectedQuiz) return <QuizDetail quiz={selectedQuiz} onBack={() => setSelectedQuizId(undefined)} />;
 
@@ -17,9 +28,9 @@ export const QuizScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) => {
     <View style={styles.screen}>
       <View style={styles.header}><IconButton icon="menu" onPress={onOpenDrawer} color={colors.text} accessibilityLabel="Open menu" /><View style={{ flex: 1 }}><Text style={styles.kicker}>PRACTICE WHAT YOU KNOW</Text><Text style={styles.title}>Quizzes</Text></View><IconButton icon="options-outline" onPress={() => Alert.alert('Quiz preferences', 'Question count, difficulty, and question types will be configured here.')} color={colors.textMuted} accessibilityLabel="Quiz preferences" /></View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Surface style={styles.hero}><View style={styles.heroIcon}><AppIcon name="school" size={27} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.heroTitle}>Turn notes into momentum</Text><Text style={styles.heroBody}>Generate practice questions from the notes already on your device.</Text></View><Pressable onPress={() => createQuiz()} style={styles.heroButton}><AppIcon name="add" size={20} color="#FFFFFF" /></Pressable></Surface>
+        <Surface style={styles.hero}><View style={styles.heroIcon}><AppIcon name="school" size={27} color={colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.heroTitle}>Turn notes into momentum</Text><Text style={styles.heroBody}>Generate practice questions from the notes already on your device.</Text></View><Pressable onPress={() => void generateQuiz()} disabled={generating} style={[styles.heroButton, generating && { opacity: 0.55 }]}><AppIcon name={generating ? 'hourglass-outline' : 'add'} size={20} color="#FFFFFF" /></Pressable></Surface>
         <SectionTitle eyebrow="YOUR PROGRESS" title="Study sets" action={<Text style={styles.count}>{data.quizzes.length} total</Text>} />
-        {data.quizzes.length ? data.quizzes.map((quiz) => <QuizCard key={quiz.id} quiz={quiz} onPress={() => setSelectedQuizId(quiz.id)} />) : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="sparkles" size={26} color={colors.primary} /></View><Text style={styles.emptyTitle}>No quizzes yet</Text><Text style={styles.emptyBody}>Create one from your local notes whenever you are ready to test your understanding.</Text><PrimaryButton label="Generate a quiz" icon="sparkles" onPress={() => createQuiz()} /></View>}
+        {data.quizzes.length ? data.quizzes.map((quiz) => <QuizCard key={quiz.id} quiz={quiz} onPress={() => setSelectedQuizId(quiz.id)} />) : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="sparkles" size={26} color={colors.primary} /></View><Text style={styles.emptyTitle}>No quizzes yet</Text><Text style={styles.emptyBody}>Create one from your local notes whenever you are ready to test your understanding.</Text><PrimaryButton label={generating ? 'Generating…' : 'Generate a quiz'} icon="sparkles" onPress={() => void generateQuiz()} /></View>}
       </ScrollView>
     </View>
   );
@@ -30,12 +41,23 @@ const QuizCard = ({ quiz, onPress }: { quiz: Quiz; onPress: () => void }) => (
 );
 
 const QuizDetail = ({ quiz, onBack }: { quiz: Quiz; onBack: () => void }) => {
+  const { saveQuizScore } = useAppStore();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const score = useMemo(() => quiz.questions.filter((question) => answers[question.id] === question.answer).length, [answers, quiz.questions]);
 
+  const submit = () => {
+    if (submitted) {
+      setAnswers({});
+      setSubmitted(false);
+      return;
+    }
+    setSubmitted(true);
+    saveQuizScore(quiz.id, quiz.questions.length ? score / quiz.questions.length : 0);
+  };
+
   return (
-    <View style={styles.screen}><View style={styles.header}><IconButton icon="arrow-back" onPress={onBack} color={colors.text} accessibilityLabel="Back to quizzes" /><View style={{ flex: 1 }}><Text style={styles.kicker}>STUDY SET</Text><Text style={styles.title}>{quiz.title}</Text></View><View style={styles.difficulty}><Text style={styles.difficultyText}>{quiz.difficulty}</Text></View></View><ScrollView contentContainerStyle={styles.quizContent}>{submitted && <View style={styles.result}><AppIcon name="trophy" size={26} color={colors.peach} /><View><Text style={styles.resultTitle}>Nice work — {score}/{quiz.questions.length}</Text><Text style={styles.resultBody}>Review the answers below and try again whenever you like.</Text></View></View>}{quiz.questions.map((question, index) => <View key={question.id} style={styles.questionCard}><Text style={styles.questionNumber}>QUESTION {index + 1}</Text><Text style={styles.questionPrompt}>{question.prompt}</Text>{question.options.map((option) => { const selected = answers[question.id] === option; const correct = submitted && option === question.answer; const incorrect = submitted && selected && !correct; return <Pressable key={option} onPress={() => !submitted && setAnswers((current) => ({ ...current, [question.id]: option }))} style={[styles.option, selected && styles.optionSelected, correct && styles.optionCorrect, incorrect && styles.optionIncorrect]}><Text style={styles.optionText}>{option}</Text>{(selected || correct) && <AppIcon name={correct ? 'checkmark-circle' : 'radio-button-on'} size={18} color={correct ? colors.success : colors.primary} />}</Pressable>; })}</View>)}<PrimaryButton label={submitted ? 'Try again' : 'Check answers'} onPress={() => { if (submitted) { setAnswers({}); setSubmitted(false); } else setSubmitted(true); }} icon={submitted ? 'refresh' : 'checkmark'} /></ScrollView></View>
+    <View style={styles.screen}><View style={styles.header}><IconButton icon="arrow-back" onPress={onBack} color={colors.text} accessibilityLabel="Back to quizzes" /><View style={{ flex: 1 }}><Text style={styles.kicker}>STUDY SET</Text><Text style={styles.title}>{quiz.title}</Text></View><View style={styles.difficulty}><Text style={styles.difficultyText}>{quiz.difficulty}</Text></View></View><ScrollView contentContainerStyle={styles.quizContent}>{submitted && <View style={styles.result}><AppIcon name="trophy" size={26} color={colors.peach} /><View><Text style={styles.resultTitle}>Nice work — {score}/{quiz.questions.length}</Text><Text style={styles.resultBody}>Review the answers below and try again whenever you like.</Text></View></View>}{quiz.questions.map((question, index) => <View key={question.id} style={styles.questionCard}><Text style={styles.questionNumber}>QUESTION {index + 1}</Text><Text style={styles.questionPrompt}>{question.prompt}</Text>{question.options.map((option) => { const selected = answers[question.id] === option; const correct = submitted && option === question.answer; const incorrect = submitted && selected && !correct; return <Pressable key={option} onPress={() => !submitted && setAnswers((current) => ({ ...current, [question.id]: option }))} style={[styles.option, selected && styles.optionSelected, correct && styles.optionCorrect, incorrect && styles.optionIncorrect]}><Text style={styles.optionText}>{option}</Text>{(selected || correct) && <AppIcon name={correct ? 'checkmark-circle' : 'radio-button-on'} size={18} color={correct ? colors.success : colors.primary} />}</Pressable>; })}</View>)}<PrimaryButton label={submitted ? 'Try again' : 'Check answers'} onPress={submit} icon={submitted ? 'refresh' : 'checkmark'} /></ScrollView></View>
   );
 };
 

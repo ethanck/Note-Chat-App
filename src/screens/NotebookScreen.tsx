@@ -9,6 +9,7 @@ export const NotebookScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) =
   const [selectedId, setSelectedId] = useState(data.notebooks[0]?.id);
   const [promptVisible, setPromptVisible] = useState(false);
   const [newName, setNewName] = useState('');
+  const [organizing, setOrganizing] = useState(false);
   const notebook = data.notebooks.find((item) => item.id === selectedId) || data.notebooks[0];
 
   const create = () => {
@@ -21,6 +22,11 @@ export const NotebookScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) =
   if (!notebook) return null;
 
   const insert = (prefix: string, suffix = '') => updateNotebook(notebook.id, { content: `${notebook.content}${notebook.content ? '\n' : ''}${prefix}${suffix}` });
+  const addToNotes = async () => {
+    setOrganizing(true);
+    await addNotebookToNotes(notebook.id);
+    setOrganizing(false);
+  };
 
   return (
     <View style={styles.screen}>
@@ -32,7 +38,7 @@ export const NotebookScreen = ({ onOpenDrawer }: { onOpenDrawer: () => void }) =
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.notebookTabs}>
         {data.notebooks.map((item) => <Pill key={item.id} label={item.name} active={item.id === notebook.id} onPress={() => setSelectedId(item.id)} />)}
       </ScrollView>
-      <View style={styles.notebookTitleRow}><View><Text style={styles.notebookName}>{notebook.name}</Text><Text style={styles.notebookMeta}>Autosaved locally · {notebook.content.length} characters</Text></View><Pressable onPress={() => addNotebookToNotes(notebook.id)} style={styles.addToNotes}><AppIcon name="document-text-outline" size={16} color={colors.primary} /><Text style={styles.addToNotesText}>Add to Notes</Text></Pressable></View>
+      <View style={styles.notebookTitleRow}><View><Text style={styles.notebookName}>{notebook.name}</Text><Text style={styles.notebookMeta}>Autosaved locally · {notebook.content.length} characters</Text></View><Pressable disabled={organizing} onPress={addToNotes} style={[styles.addToNotes, organizing && { opacity: 0.55 }]}><AppIcon name="document-text-outline" size={16} color={colors.primary} /><Text style={styles.addToNotesText}>{organizing ? 'Preparing…' : 'Add to Notes'}</Text></Pressable></View>
       <View style={styles.editorToolbar}>
         <ToolbarButton label="H1" onPress={() => insert('# ')} /><ToolbarButton label="B" bold onPress={() => insert('**bold**')} /><ToolbarButton label="I" italic onPress={() => insert('_italic_')} /><ToolbarButton label="•" onPress={() => insert('- ')} /><ToolbarButton label="☑" onPress={() => insert('- [ ] ')} /><ToolbarButton label="↗" onPress={() => insert('[link](https://)')} />
       </View>
