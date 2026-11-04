@@ -14,7 +14,7 @@ export const ChatScreen = ({
   chatId: string;
   onOpenDrawer: () => void;
 }) => {
-  const { data, sendMessage, organizeChatToNotes, createChat, lastAction, clearLastAction } = useAppStore();
+  const { data, sendMessage, organizeChatToNotes, undoLastOrganization, canUndoOrganization, createChat, lastAction, clearLastAction } = useAppStore();
   const chat = data.chats.find((item) => item.id === chatId) || data.chats[0];
   const [input, setInput] = useState('');
   const [quickMode, setQuickMode] = useState(false);
@@ -104,11 +104,12 @@ export const ChatScreen = ({
           orderedMessages.map((message) => <MessageBubble key={message.id} message={message} />)
         )}
         {lastAction && (
-          <Pressable onPress={clearLastAction} style={styles.actionToast}>
+          <View style={styles.actionToast}>
             <AppIcon name="checkmark-circle" size={17} color={colors.success} />
             <Text style={styles.actionToastText}>{lastAction}</Text>
-            <AppIcon name="close" size={15} color={colors.textMuted} />
-          </Pressable>
+            {canUndoOrganization && <Pressable onPress={undoLastOrganization} style={styles.undoButton} accessibilityRole="button"><Text style={styles.undoButtonText}>Undo</Text></Pressable>}
+            <Pressable onPress={clearLastAction} hitSlop={8} accessibilityRole="button" accessibilityLabel="Dismiss notification"><AppIcon name="close" size={15} color={colors.textMuted} /></Pressable>
+          </View>
         )}
       </ScrollView>
 
@@ -232,6 +233,8 @@ const styles = StyleSheet.create({
   userTime: { color: 'rgba(255,255,255,.72)' },
   actionToast: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.successSoft, borderRadius: 14, padding: 12 },
   actionToastText: { flex: 1, color: colors.success, fontSize: 12, fontWeight: '700' },
+  undoButton: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 7, backgroundColor: colors.surface },
+  undoButtonText: { color: colors.primaryDark, fontSize: 11, fontWeight: '900' },
   attachmentList: { gap: 8, paddingHorizontal: 15, paddingVertical: 7 },
   attachmentChip: { flexDirection: 'row', alignItems: 'center', gap: 7, width: 220, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: colors.primarySoft, borderRadius: radii.md },
   attachmentChipText: { flex: 1, minWidth: 0 },

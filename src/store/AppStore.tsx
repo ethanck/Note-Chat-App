@@ -36,6 +36,8 @@ type AppStore = {
   sendMessage: (chatId: string, content: string, attachments?: Attachment[]) => Promise<void>;
   deleteReference: (id: string) => void;
   organizeChatToNotes: (chatId: string) => Promise<'saved' | 'review' | 'failed'>;
+  canUndoOrganization: boolean;
+  undoLastOrganization: () => void;
   applyOrganizationProposal: (id: string) => void;
   dismissOrganizationProposal: (id: string) => void;
   createFolder: (name: string, parentId?: string) => string;
@@ -53,6 +55,15 @@ type AppStore = {
   connectChatGPT: (account: ChatGPTAccount) => void;
   disconnectChatGPT: () => void;
   clearLastAction: () => void;
+};
+
+type OrganizationCollections = Pick<AppData, 'folders' | 'notes' | 'chats' | 'references' | 'organizationProposals'>;
+
+type OrganizationUndo = {
+  id: string;
+  label: string;
+  before: OrganizationCollections;
+  after: OrganizationCollections;
 };
 
 const AppStoreContext = createContext<AppStore | null>(null);
@@ -229,6 +240,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [data, setData] = useState<AppData>(() => createDefaultData());
   const [ready, setReady] = useState(false);
   const [lastAction, setLastAction] = useState<string>();
+  const [organizationUndo, setOrganizationUndo] = useState<OrganizationUndo>();
 
   useEffect(() => {
     Promise.all([loadAppData(), loadChatGPTAccount()])
@@ -465,12 +477,31 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const applyPlanForChat = (chatId: string, plan: OrganizationPlan) => {
-    const result = applyOrganizationPlan(data, chatId, plan);
+    const before = data;
+    const result = applyOrganizationPlan(before, chatId, plan);
     if (result.data === data) {
       setLastAction(result.label);
       return false;
     }
     update(() => result.data);
+    setOrganizationUndo({
+      id: makeId('organization-undo'),
+      label: result.label,
+      before: {
+        folders: before.folders,
+        notes: before.notes,
+        chats: before.chats,
+        references: before.references,
+        organizationProposals: before.organizationProposals,
+      },
+      after: {
+        folders: result.data.folders,
+        notes: result.data.notes,
+        chats: result.data.chats,
+        references: result.data.references,
+        organizationProposals: result.data.organizationProposals,
+      },
+    });
     setLastAction(`${result.label} · confidence ${Math.round(plan.confidence * 100)}%`);
     return true;
   };
@@ -500,12 +531,51 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const applyOrganizationProposal = (id: string) => {
     const proposal = data.organizationProposals.find((item) => item.id === id && item.status === 'pending');
     if (!proposal) return;
-    if (applyPlanForChat(proposal.chatId, proposal.plan)) {
-      update((current) => ({
-        ...current,
-        organizationProposals: current.organizationProposals.map((item) => item.id === id ? { ...item, status: 'applied' } : item),
-      }));
+    const before = data;
+    const result = applyOrganizationPlan(before, proposal.chatId, proposal.plan);
+    if (result.data === before) {
+      setLastAction(result.label);
+      return;
     }
+    const after = {
+      ...result.data,
+      organizationProposals: result.data.organizationProposals.map((item) => item.id === id ? { ...item, status: 'applied' as const } : item),
+    };
+    update(() => after);
+    setOrganizationUndo({
+      id: makeId('organization-undo'),
+      label: result.label,
+      before: {
+        folders: before.folders,
+        notes: before.notes,
+        chats: before.chats,
+        references: before.references,
+        organizationProposals: before.organizationProposals,
+      },
+      after: {
+        folders: after.folders,
+        notes: after.notes,
+        chats: after.chats,
+        references: after.references,
+        organizationProposals: after.organizationProposals,
+      },
+    });
+    setLastAction(`${result.label} · organization proposal applied`);
+  };
+
+  const undoLastOrganization = () => {
+    const undo = organizationUndo;
+    if (!undo) return;
+    update((current) => ({
+      ...current,
+      folders: current.folders === undo.after.folders ? undo.before.folders : current.folders,
+      notes: current.notes === undo.after.notes ? undo.before.notes : current.notes,
+      chats: current.chats === undo.after.chats ? undo.before.chats : current.chats,
+      references: current.references === undo.after.references ? undo.before.references : current.references,
+      organizationProposals: current.organizationProposals === undo.after.organizationProposals ? undo.before.organizationProposals : current.organizationProposals,
+    }));
+    setOrganizationUndo(undefined);
+    setLastAction(`Undid ${undo.label}`);
   };
 
   const dismissOrganizationProposal = (id: string) => {
@@ -607,6 +677,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       sendMessage,
       deleteReference,
       organizeChatToNotes,
+      canUndoOrganization: Boolean(organizationUndo),
+      undoLastOrganization,
       applyOrganizationProposal,
       dismissOrganizationProposal,
       createFolder,
@@ -625,7 +697,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       disconnectChatGPT,
       clearLastAction,
     }),
-    [data, ready, lastAction, activeChat],
+    [data, ready, lastAction, activeChat, organizationUndo],
   );
 
   return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;
